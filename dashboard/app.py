@@ -346,3 +346,154 @@ else:
         "- **Against Qiskit L2/L3**: Qiskit L2/L3 uses global synthesis, analytical KAK matrix decomposition, and aggressive heuristics that our peephole/commutation passes alone do not duplicate, leading to losses on structured multi-qubit benchmarks.\n"
         "- **Device Note**: All simulations were conducted via noisy simulation using IBM device noise models (`FakeSherbrooke`). No physical hardware was queried."
     )
+
+# -----------------------------------------------------------------------------
+# Panel 7: Hardware run (saved results) - Appears ONLY if mode == "hardware"
+# -----------------------------------------------------------------------------
+HARDWARE_DIR = Path(__file__).resolve().parent.parent / "results" / "hardware"
+hardware_records = []
+
+if HARDWARE_DIR.exists():
+    import json
+    for json_file in sorted(HARDWARE_DIR.glob("*.json"), reverse=True):
+        try:
+            with open(json_file, "r", encoding="utf-8") as f:
+                content = json.load(f)
+                if content.get("mode") == "hardware":
+                    hardware_records.append((json_file.name, content))
+        except Exception:
+            continue
+
+if hardware_records:
+    st.markdown("---")
+    st.header("7. Hardware run (saved results)")
+    st.markdown(
+        "Execution results from IBM Quantum hardware submission. "
+        "Shows fair apples-to-apples comparison using identical layout and backend pass managers."
+    )
+
+    if len(hardware_records) > 1:
+        selected_file_name = st.selectbox(
+            "Select hardware execution record:",
+            options=[name for name, _ in hardware_records],
+        )
+        active_record = next(rec for name, rec in hardware_records if name == selected_file_name)
+    else:
+        active_record = hardware_records[0][1]
+
+    col_meta1, col_meta2, col_meta3, col_meta4 = st.columns(4)
+    with col_meta1:
+        st.metric("Backend", active_record.get("backend", "Unknown"))
+    with col_meta2:
+        st.metric("Job ID", str(active_record.get("job_id", "Unknown"))[:16] + "...")
+    with col_meta3:
+        st.metric("Timestamp", str(active_record.get("timestamp", ""))[:19].replace("T", " "))
+    with col_meta4:
+        st.metric("Shots", active_record.get("shots", 0))
+
+    st.markdown(f"**Physical Qubit Layout**: `{active_record.get('layout')}`")
+
+    # Table of post-transpile metrics & success probabilities
+    variants_data = active_record.get("variants", {})
+    table_rows = []
+    bar_variants = []
+    bar_probs = []
+    bar_errs = []
+
+    for v_name in ["original", "ours", "qiskit_L1", "qiskit_L3"]:
+        if v_name in variants_data:
+            vd = variants_data[v_name]
+            pm = vd.get("post_transpile_metrics", {})
+            p_val = vd.get("success_probability")
+            err_val = vd.get("stderr", 0.0)
+            table_rows.append({
+                "Variant": v_name,
+                "Total Gates": pm.get("total_gates", "N/A"),
+                "2Q Gates": pm.get("two_qubit_gates", "N/A"),
+                "Depth": pm.get("depth", "N/A"),
+                "Success Probability": f"{p_val:.4f} +/- {err_val:.4f}" if p_val is not None else "N/A",
+                "Hellinger Fidelity": f"{vd.get('hellinger_fidelity'):.4f}" if vd.get("hellinger_fidelity") is not None else "N/A",
+            })
+            if p_val is not None:
+                bar_variants.append(v_name)
+                bar_probs.append(p_val)
+                bar_errs.append(err_val or 0.0)
+
+    st.subheader("Post-Transpile Metrics & Success Probabilities")
+    st.dataframe(pd.DataFrame(table_rows), width="stretch")
+
+    # Bar chart of success probabilities with error bars
+    if bar_probs:
+        st.subheader("Success Probability Comparison (with Binomial Error)")
+        fig_hw, ax_hw = plt.subplots(figsize=(8, 4))
+        colors = ["#7f7f7f", "#2ca02c", "#1f77b4", "#ff7f0e"][:len(bar_variants)]
+        bars = ax_hw.bar(
+            bar_variants,
+            bar_probs,
+            yerr=bar_errs,
+            capsize=5,
+            color=colors,
+            alpha=0.85,
+            edgecolor="black",
+        )
+        ax_hw.set_ylabel("Success Probability")
+        ax_hw.set_ylim(0, max(bar_probs) * 1.25 if max(bar_probs) > 0 else 1.0)
+        ax_hw.set_title(f"Hardware Execution: {active_record.get('benchmark')} on {active_record.get('backend')}")
+        ax_hw.grid(True, linestyle="--", alpha=0.3, axis="y")
+
+        for bar, p_val in zip(bars, bar_probs):
+            yval = bar.get_height()
+            ax_hw.text(
+                bar.get_x() + bar.get_width() / 2.0,
+                yval + 0.01,
+                f"{p_val:.3f}",
+                ha="center",
+                va="bottom",
+                fontsize=9,
+                fontweight="bold",
+            )
+
+        st.pyplot(fig_hw)
+        plt.close(fig_hw)
+
+# Offline simulation (dry-run) saved records
+dry_run_records = []
+if HARDWARE_DIR.exists():
+    for json_file in sorted(HARDWARE_DIR.glob("*.json"), reverse=True):
+        try:
+            with open(json_file, "r", encoding="utf-8") as f:
+                content = json.load(f)
+                if content.get("mode") == "dry_run":
+                    dry_run_records.append((json_file.name, content))
+        except Exception:
+            continue
+
+if dry_run_records:
+    with st.expander("📁 Offline Device Model Simulation Runs (Dry-Run Mode)"):
+        st.markdown(
+            "Saved execution records from offline dry-run **simulation** using IBM device noise models. "
+            "These are classical simulations and not hardware executions."
+        )
+        sim_name = st.selectbox(
+            "Select simulation record to preview:",
+            options=[name for name, _ in dry_run_records],
+            key="sim_record_select",
+        )
+        sim_rec = next(rec for name, rec in dry_run_records if name == sim_name)
+        st.write(f"**Backend**: `{sim_rec.get('backend')}` (simulation) | **Job**: `{sim_rec.get('job_id')}` | **Layout**: `{sim_rec.get('layout')}`")
+        sim_rows = []
+        for v_name, v_data in sim_rec.get("variants", {}).items():
+            pm = v_data.get("post_transpile_metrics", {})
+            p_val = v_data.get("success_probability")
+            err_val = v_data.get("stderr", 0.0)
+            sim_rows.append({
+                "Variant": v_name,
+                "Total Gates": pm.get("total_gates", "N/A"),
+                "2Q Gates": pm.get("two_qubit_gates", "N/A"),
+                "Depth": pm.get("depth", "N/A"),
+                "Success Probability": f"{p_val:.4f} +/- {err_val:.4f}" if p_val is not None else "N/A",
+                "Hellinger Fidelity": f"{v_data.get('hellinger_fidelity'):.4f}" if v_data.get("hellinger_fidelity") is not None else "N/A",
+            })
+        st.dataframe(pd.DataFrame(sim_rows), width="stretch")
+
+
