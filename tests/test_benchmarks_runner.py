@@ -31,10 +31,23 @@ def test_run_benchmarks_smoke(tmp_path):
         "two_qubit_gates",
         "depth",
         "est_fidelity",
-        "success_prob",
+        "hellinger_mean",
+        "hellinger_std",
+        "success_prob_mean",
+        "success_prob_std",
+        "seeds",
+        "equivalent",
     ]
     assert list(df.columns) == expected_cols
 
     # Verify variants exist
     variants = set(df["variant"].unique())
-    assert {"original", "qiskit_L0", "qiskit_L1", "qiskit_L2", "qiskit_L3", "ours"}.issubset(variants)
+    assert {
+        "original",
+        "qiskit_L0",
+        "qiskit_L1",
+        "qiskit_L2",
+        "qiskit_L3",
+        "ours",
+        "ours_highlevel",
+    }.issubset(variants)

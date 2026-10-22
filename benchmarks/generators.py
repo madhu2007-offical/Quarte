@@ -6,13 +6,13 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 from qiskit import QuantumCircuit
 from qiskit.circuit.library import CDKMRippleCarryAdder
-from qiskit.qasm2 import dumps
+from qiskit.qasm2 import dump, dumps, load, loads
 
 
 def bell(measure: bool = False) -> QuantumCircuit:
     """Generate a standard 2-qubit Bell state (|00> + |11>) / sqrt(2).
 
-    No deterministic single measurement bitstring exists.
+    Ideal output distribution: 50% |00> and 50% |11>.
 
     Args:
         measure: If True, adds measurement operations.
@@ -25,14 +25,17 @@ def bell(measure: bool = False) -> QuantumCircuit:
     qc.cx(0, 1)
     if measure:
         qc.measure_all()
-    qc.metadata = {"correct_bitstring": None}
+    qc.metadata = {
+        "correct_bitstring": None,
+        "ideal_distribution": {"00": 0.5, "11": 0.5},
+    }
     return qc
 
 
 def ghz(n: int, measure: bool = False) -> QuantumCircuit:
     """Generate an n-qubit Greenberger-Horne-Zeilinger (GHZ) state.
 
-    No single deterministic bitstring exists (superposition of |0...0> and |1...1>).
+    Ideal output distribution: 50% |0...0> and 50% |1...1>.
 
     Args:
         n: Number of qubits (>= 1).
@@ -49,7 +52,10 @@ def ghz(n: int, measure: bool = False) -> QuantumCircuit:
         qc.cx(0, i)
     if measure:
         qc.measure_all()
-    qc.metadata = {"correct_bitstring": None}
+    qc.metadata = {
+        "correct_bitstring": None,
+        "ideal_distribution": {"0" * n: 0.5, "1" * n: 0.5},
+    }
     return qc
 
 
@@ -74,7 +80,10 @@ def qft(n: int) -> QuantumCircuit:
             qc.cp(angle, j, i)
     for i in range(n // 2):
         qc.swap(i, n - 1 - i)
-    qc.metadata = {"correct_bitstring": None}
+    qc.metadata = {
+        "correct_bitstring": None,
+        "ideal_distribution": None,
+    }
     return qc
 
 
@@ -94,26 +103,25 @@ def qft_then_inverse(n: int, basis_state: Optional[str] = None) -> QuantumCircui
     if n < 1:
         raise ValueError("n must be at least 1.")
     if basis_state is None:
-        # Default alternating pattern, e.g. "101" for n=3, "1010" for n=4
         basis_state = "".join("1" if i % 2 == 0 else "0" for i in range(n))
 
     if len(basis_state) != n:
         raise ValueError(f"basis_state length ({len(basis_state)}) must equal n ({n}).")
 
     qc = QuantumCircuit(n)
-    # Prepare basis state (Qiskit bitstrings are little-endian: index 0 is rightmost bit)
     for i, bit in enumerate(reversed(basis_state)):
         if bit == "1":
             qc.x(i)
 
-    # Forward QFT
     fwd = qft(n)
     qc.compose(fwd, inplace=True)
-    # Inverse QFT
     inv = fwd.inverse()
     qc.compose(inv, inplace=True)
 
-    qc.metadata = {"correct_bitstring": basis_state}
+    qc.metadata = {
+        "correct_bitstring": basis_state,
+        "ideal_distribution": {basis_state: 1.0},
+    }
     return qc
 
 
@@ -126,7 +134,6 @@ def grover_small() -> QuantumCircuit:
         QuantumCircuit: 2-qubit Grover circuit with correct_bitstring = "11".
     """
     qc = QuantumCircuit(2)
-    # Uniform superposition
     qc.h(0)
     qc.h(1)
 
@@ -144,7 +151,10 @@ def grover_small() -> QuantumCircuit:
     qc.h(0)
     qc.h(1)
 
-    qc.metadata = {"correct_bitstring": "11"}
+    qc.metadata = {
+        "correct_bitstring": "11",
+        "ideal_distribution": {"11": 1.0},
+    }
     return qc
 
 
@@ -171,18 +181,19 @@ def ripple_carry_adder(n: int = 1) -> QuantumCircuit:
     qc = QuantumCircuit(adder.num_qubits)
 
     if n == 1:
-        # cin=0, a0=1, b0=1, cout=0 -> output '1010'
         qc.x(1)
         qc.x(2)
         expected = "1010"
     else:
-        # cin=0, a=1 (a0=1), b=2 (b1=1), cout=0 -> output '011010'
         qc.x(1)
         qc.x(4)
         expected = "011010"
 
     qc.compose(adder, inplace=True)
-    qc.metadata = {"correct_bitstring": expected}
+    qc.metadata = {
+        "correct_bitstring": expected,
+        "ideal_distribution": {expected: 1.0},
+    }
     return qc
 
 
@@ -237,8 +248,27 @@ def random_redundant_circuit(n: int, depth: int, seed: int = 42) -> QuantumCircu
             theta = rng.uniform(-np.pi, np.pi)
             qc.rz(theta, q)
 
-    qc.metadata = {"correct_bitstring": None}
+    qc.metadata = {
+        "correct_bitstring": None,
+        "ideal_distribution": None,
+    }
     return qc
+
+
+def load_qasm(filepath: str) -> QuantumCircuit:
+    """Load a benchmark circuit from an OpenQASM 2 file.
+
+    Args:
+        filepath: Path to the OpenQASM (.qasm) file.
+
+    Returns:
+        Loaded QuantumCircuit.
+    """
+    path = Path(filepath)
+    if not path.exists():
+        raise FileNotFoundError(f"QASM file not found at {filepath}")
+    with open(path, "r", encoding="utf-8") as f:
+        return loads(f.read())
 
 
 def get_random_benchmark_circuits() -> List[Tuple[str, QuantumCircuit]]:
@@ -250,7 +280,6 @@ def get_random_benchmark_circuits() -> List[Tuple[str, QuantumCircuit]]:
     benchmarks = []
     for s in range(8):
         name = f"random_seed_{s}"
-        # 3 qubits, depth 15, deterministic seed
         circ = random_redundant_circuit(n=3, depth=15, seed=s)
         benchmarks.append((name, circ))
     return benchmarks
@@ -260,18 +289,18 @@ def get_benchmark_suite() -> List[Dict[str, Any]]:
     """Assemble the comprehensive suite of benchmark circuits for evaluation.
 
     Returns:
-        List of dicts containing 'name', 'circuit', 'qubits', and 'correct_bitstring'.
+        List of dicts containing 'name', 'circuit', 'qubits', 'correct_bitstring', and 'ideal_distribution'.
     """
     suite: List[Dict[str, Any]] = [
-        {"name": "ghz_3", "circuit": ghz(3), "qubits": 3, "correct_bitstring": None},
-        {"name": "ghz_8", "circuit": ghz(8), "qubits": 8, "correct_bitstring": None},
-        {"name": "qft_3", "circuit": qft(3), "qubits": 3, "correct_bitstring": None},
-        {"name": "qft_8", "circuit": qft(8), "qubits": 8, "correct_bitstring": None},
-        {"name": "qft_then_inverse_3", "circuit": qft_then_inverse(3, "101"), "qubits": 3, "correct_bitstring": "101"},
-        {"name": "bell", "circuit": bell(), "qubits": 2, "correct_bitstring": None},
-        {"name": "grover_small", "circuit": grover_small(), "qubits": 2, "correct_bitstring": "11"},
-        {"name": "ripple_carry_adder_1", "circuit": ripple_carry_adder(1), "qubits": 4, "correct_bitstring": "1010"},
-        {"name": "ripple_carry_adder_2", "circuit": ripple_carry_adder(2), "qubits": 6, "correct_bitstring": "011010"},
+        {"name": "ghz_3", "circuit": ghz(3), "qubits": 3, "correct_bitstring": None, "ideal_distribution": ghz(3).metadata["ideal_distribution"]},
+        {"name": "ghz_8", "circuit": ghz(8), "qubits": 8, "correct_bitstring": None, "ideal_distribution": ghz(8).metadata["ideal_distribution"]},
+        {"name": "qft_3", "circuit": qft(3), "qubits": 3, "correct_bitstring": None, "ideal_distribution": None},
+        {"name": "qft_8", "circuit": qft(8), "qubits": 8, "correct_bitstring": None, "ideal_distribution": None},
+        {"name": "qft_then_inverse_3", "circuit": qft_then_inverse(3, "101"), "qubits": 3, "correct_bitstring": "101", "ideal_distribution": {"101": 1.0}},
+        {"name": "bell", "circuit": bell(), "qubits": 2, "correct_bitstring": None, "ideal_distribution": bell().metadata["ideal_distribution"]},
+        {"name": "grover_small", "circuit": grover_small(), "qubits": 2, "correct_bitstring": "11", "ideal_distribution": {"11": 1.0}},
+        {"name": "ripple_carry_adder_1", "circuit": ripple_carry_adder(1), "qubits": 4, "correct_bitstring": "1010", "ideal_distribution": {"1010": 1.0}},
+        {"name": "ripple_carry_adder_2", "circuit": ripple_carry_adder(2), "qubits": 6, "correct_bitstring": "011010", "ideal_distribution": {"011010": 1.0}},
     ]
 
     for name, circ in get_random_benchmark_circuits():
@@ -279,7 +308,8 @@ def get_benchmark_suite() -> List[Dict[str, Any]]:
             "name": name,
             "circuit": circ,
             "qubits": circ.num_qubits,
-            "correct_bitstring": circ.metadata.get("correct_bitstring") if circ.metadata else None,
+            "correct_bitstring": None,
+            "ideal_distribution": None,
         })
 
     return suite
