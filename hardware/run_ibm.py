@@ -299,12 +299,13 @@ def run_hardware_workflow(
         poll_interval = 10
 
         while True:
-            status = job.status()
-            logger.info(f"Job {job_id} status: {status}")
-            if status in ("DONE", "COMPLETED"):
+            raw_status = job.status()
+            status_name = raw_status.name if hasattr(raw_status, "name") else str(raw_status).upper()
+            logger.info(f"Job {job_id} status: {status_name}")
+            if status_name in ("DONE", "COMPLETED"):
                 break
-            elif status in ("ERROR", "CANCELLED"):
-                raise RuntimeError(f"Job {job_id} terminated with failure status: {status}")
+            elif status_name in ("ERROR", "CANCELLED"):
+                raise RuntimeError(f"Job {job_id} terminated with failure status: {status_name}")
 
             if time.time() - start_time > timeout_seconds:
                 raise TimeoutError(f"Job {job_id} timed out after {timeout_seconds}s waiting for completion.")
@@ -315,8 +316,10 @@ def run_hardware_workflow(
         for idx, name in enumerate(variant_names_ordered):
             pub_data = job_result[idx].data
             # Extract measurement counts from first available classical register
-            key = list(pub_data.keys())[0]
-            counts_map[name] = pub_data[key].get_counts()
+            keys = list(pub_data.keys()) if hasattr(pub_data, "keys") else [k for k in dir(pub_data) if not k.startswith("_")]
+            key = keys[0]
+            meas_obj = pub_data[key] if hasattr(pub_data, "__getitem__") else getattr(pub_data, key)
+            counts_map[name] = meas_obj.get_counts()
     else:
         # Dry-run AerSimulator execution
         sim = AerSimulator.from_backend(backend)

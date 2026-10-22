@@ -1,0 +1,92 @@
+{
+  "benchmark": "qft_then_inverse_3",
+  "backend": "ibm_fez",
+  "job_id": "dbd6v6k24mrc73cksj10",
+  "timestamp": "2026-10-22T20:18:40.215313+00:00",
+  "shots": 2000,
+  "layout": [
+    22,
+    23,
+    24
+  ],
+  "mode": "hardware",
+  "correct_bitstring": "101",
+  "variants": {
+    "original": {
+      "post_transpile_metrics": {
+        "total_gates": 182,
+        "two_qubit_gates": 24,
+        "depth": 123
+      },
+      "counts": {
+        "101": 1796,
+        "100": 62,
+        "111": 23,
+        "011": 14,
+        "001": 58,
+        "000": 26,
+        "110": 14,
+        "010": 7
+      },
+      "success_probability": 0.898,
+      "stderr": 0.006767,
+      "hellinger_fidelity": 0.898
+    },
+    "ours": {
+      "post_transpile_metrics": {
+        "total_gates": 131,
+        "two_qubit_gates": 18,
+        "depth": 91
+      },
+      "counts": {
+        "101": 1813,
+        "100": 75,
+        "001": 62,
+        "110": 10,
+        "111": 15,
+        "011": 8,
+        "000": 6,
+        "010": 11
+      },
+      "success_probability": 0.9065,
+      "stderr": 0.00651,
+      "hellinger_fidelity": 0.9065
+    },
+    "qiskit_L1": {
+      "post_transpile_metrics": {
+        "total_gates": 130,
+        "two_qubit_gates": 18,
+        "depth": 91
+      },
+      "counts": {
+        "101": 1825,
+        "100": 58,
+        "001": 56,
+        "011": 11,
+        "111": 21,
+        "000": 6,
+        "110": 11,
+        "010": 12
+      },
+      "success_probability": 0.9125,
+      "stderr": 0.006318,
+      "hellinger_fidelity": 0.9125
+    },
+    "qiskit_L3": {
+      "post_transpile_metrics": {
+        "total_gates": 2,
+        "two_qubit_gates": 0,
+        "depth": 1
+      },
+      "counts": {
+        "101": 1961,
+        "100": 13,
+        "001": 17,
+        "111": 9
+      },
+      "success_probability": 0.9805,
+      "stderr": 0.003092,
+      "hellinger_fidelity": 0.9805
+    }
+  }
+}
