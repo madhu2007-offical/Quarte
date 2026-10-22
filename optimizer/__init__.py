@@ -3,7 +3,11 @@
 from optimizer.base import IdentityPass, OptimizationPass
 from optimizer.cancellation import CancellationPass
 from optimizer.commutation import CommutationPass
-from optimizer.equivalence import is_equivalent, strip_measurements
+from optimizer.equivalence import (
+    equivalent_up_to_permutation,
+    is_equivalent,
+    strip_measurements,
+)
 from optimizer.pipeline import OptimizationResult, optimize
 from optimizer.routing import RoutingPass
 
@@ -15,6 +19,7 @@ __all__ = [
     "RoutingPass",
     "strip_measurements",
     "is_equivalent",
+    "equivalent_up_to_permutation",
     "OptimizationResult",
     "optimize",
 ]
