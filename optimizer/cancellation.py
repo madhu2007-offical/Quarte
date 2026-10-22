@@ -4,7 +4,7 @@ from typing import Dict, Optional, Set, Tuple
 import numpy as np
 from qiskit import QuantumCircuit
 from qiskit.circuit import Parameter, ParameterExpression
-from qiskit.circuit.library import PhaseGate, RXGate, RYGate, RZGate
+from qiskit.circuit.library import PhaseGate, RXGate, RYGate, RZGate, SXGate, SXdgGate, XGate
 from qiskit.converters import circuit_to_dag, dag_to_circuit
 from qiskit.dagcircuit import DAGCircuit, DAGOpNode
 
@@ -25,6 +25,8 @@ ADJOINT_PAIRS: Set[Tuple[str, str]] = {
     ("sdg", "s"),
     ("t", "tdg"),
     ("tdg", "t"),
+    ("sx", "sxdg"),
+    ("sxdg", "sx"),
 }
 
 # Single-qubit rotation families that merge along the same axis
@@ -100,10 +102,11 @@ class CancellationPass(OptimizationPass):
     """Pass 1: Gate cancellation and rotation merging on Qiskit DAGCircuit.
 
     Rewrite Rules:
-    - Rule 1a (Inverse pairs):
+    - Rule 1a (Inverse pairs & basis cancellations):
         Cancels directly adjacent self-inverse gates (H-H, X-X, Y-Y, Z-Z,
         CX-CX with matching control/target, CZ-CZ, SWAP-SWAP) and adjoint pairs
-        (S-Sdg, Sdg-S, T-Tdg, Tdg-T).
+        (S-Sdg, Sdg-S, T-Tdg, Tdg-T, SX-SXdg, SXdg-SX).
+        Merges adjacent SX-SX -> X.
     - Rule 1b (Rotation merging & identity elimination):
         Merges adjacent 1-qubit rotations along the same axis (RZ, RX, RY, P)
         into a single rotation with the summed angle.
@@ -209,6 +212,17 @@ class CancellationPass(OptimizationPass):
 
                 if can_cancel:
                     dag.remove_op_node(node)
+                    dag.remove_op_node(succ_node)
+                    changed = True
+                    break
+
+                # Rule 1a extension: SX - SX -> X
+                if (
+                    node.name == "sx"
+                    and succ_node.name == "sx"
+                    and node.qargs == succ_node.qargs
+                ):
+                    dag.substitute_node(node, XGate(), inplace=True)
                     dag.remove_op_node(succ_node)
                     changed = True
                     break

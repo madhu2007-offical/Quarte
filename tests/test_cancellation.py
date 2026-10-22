@@ -60,16 +60,35 @@ def test_cancel_swap_swap():
 
 @pytest.mark.parametrize(
     "first_gate,second_gate",
-    [("s", "sdg"), ("sdg", "s"), ("t", "tdg"), ("tdg", "t")],
+    [
+        ("s", "sdg"),
+        ("sdg", "s"),
+        ("t", "tdg"),
+        ("tdg", "t"),
+        ("sx", "sxdg"),
+        ("sxdg", "sx"),
+    ],
 )
 def test_cancel_adjoint_pairs(first_gate, second_gate):
-    """Adjacent adjoint pairs (S-Sdg, Sdg-S, T-Tdg, Tdg-T) must cancel to identity."""
+    """Adjacent adjoint pairs (S-Sdg, Sdg-S, T-Tdg, Tdg-T, SX-SXdg, SXdg-SX) must cancel to identity."""
     qc = QuantumCircuit(1)
     getattr(qc, first_gate)(0)
     getattr(qc, second_gate)(0)
 
     opt = CancellationPass().run(qc)
     assert len(opt.data) == 0
+    assert is_equivalent(qc, opt)
+
+
+def test_merge_sx_sx_to_x():
+    """Adjacent SX gates on the same qubit must merge to an X gate."""
+    qc = QuantumCircuit(1)
+    qc.sx(0)
+    qc.sx(0)
+
+    opt = CancellationPass().run(qc)
+    assert len(opt.data) == 1
+    assert opt.data[0].operation.name == "x"
     assert is_equivalent(qc, opt)
 
 
