@@ -16,29 +16,48 @@ from qiskit.qasm2 import QASM2Error, dumps, loads
 import streamlit as st
 
 from benchmarks.generators import get_benchmark_suite
+from dashboard.theme import (
+    CARBON_PALETTE,
+    apply_carbon_theme,
+    render_equivalence_notification,
+    render_footer,
+    style_carbon_ax,
+)
 from metrics.metrics import get_metrics
 from optimizer.pipeline import optimize
 
 st.set_page_config(
-    page_title="Quantum Circuit Gate-Reduction Optimizer",
-    page_icon="⚛️",
+    page_title="Quarte - Quantum Circuit Optimizer",
     layout="wide",
+)
+
+apply_carbon_theme()
+
+# Left sidebar as side navigation
+st.sidebar.markdown('<p style="font-size: 11px; font-weight: 600; color: #525252; letter-spacing: 0.5px; margin: 8px 0 4px 16px;">NAVIGATION</p>', unsafe_allow_html=True)
+nav_selection = st.sidebar.radio(
+    "Navigation",
+    ["Overview", "Optimize", "Benchmarks", "Noisy simulation", "Hardware runs"],
+    label_visibility="collapsed",
+    key="carbon_side_nav",
 )
 
 RESULTS_CSV_PATH = Path(__file__).resolve().parent.parent / "results" / "results.csv"
 
-st.title("⚛️ Quantum Circuit Gate-Reduction Optimizer")
+st.markdown('<div id="overview"></div>', unsafe_allow_html=True)
+st.title("Quarte: Quantum circuit gate-reduction optimizer")
 st.markdown(
     "Classical, explainable quantum circuit optimizer built on Qiskit. "
     "Evaluates gate cancellation, rotation merging, commutation sliding, "
     "and compares against Qiskit transpiler baselines (L0–L3) and "
-    "**noisy simulation using IBM device noise models** (`FakeSherbrooke`)."
+    "noisy simulation using IBM device noise models (`FakeSherbrooke`)."
 )
 
 # -----------------------------------------------------------------------------
 # Panel 1: Circuit Selection & Optimization
 # -----------------------------------------------------------------------------
-st.header("1. Input Circuit & Optimization Controls")
+st.markdown('<div id="optimize"></div>', unsafe_allow_html=True)
+st.header("1. Input circuit & optimization controls")
 
 suite = get_benchmark_suite()
 benchmark_names = [b["name"] for b in suite]
@@ -75,7 +94,7 @@ with col_right:
         custom_qasm_input = dumps(bench_match["circuit"])
         st.text_area("Benchmark QASM representation:", value=custom_qasm_input, height=150, disabled=True)
 
-optimize_button = st.button("🚀 Optimize Circuit", type="primary")
+optimize_button = st.button("Optimize circuit", type="primary")
 
 # Load circuit
 parsed_circuit: QuantumCircuit = None
@@ -98,7 +117,7 @@ if optimize_button and parsed_circuit is not None:
             "Equivalence verification is restricted to circuits with <= 10 qubits."
         )
     else:
-        with st.spinner("Executing optimization passes and equivalence verification..."):
+        with st.spinner("Running optimization passes and equivalence verification..."):
             opt_res = optimize(parsed_circuit, translate_to_basis=translate_to_basis)
             st.session_state["opt_res"] = opt_res
             st.session_state["input_circuit"] = parsed_circuit
@@ -112,14 +131,14 @@ if "opt_res" in st.session_state:
     input_qc = st.session_state["input_circuit"]
 
     st.markdown("---")
-    st.header("2. Circuit Visualizations & Verification")
+    st.header("2. Circuit visualizations & verification")
 
     draw_col1, draw_col2 = st.columns(2)
 
     with draw_col1:
         st.subheader("Original Input Circuit")
         try:
-            fig_in = input_qc.draw(output="mpl")
+            fig_in = input_qc.draw(output="mpl", style="iqp")
             st.pyplot(fig_in)
             plt.close(fig_in)
         except Exception as e:
@@ -128,14 +147,14 @@ if "opt_res" in st.session_state:
     with draw_col2:
         st.subheader("Optimized Circuit")
         try:
-            fig_out = opt_res.optimized_circuit.draw(output="mpl")
+            fig_out = opt_res.optimized_circuit.draw(output="mpl", style="iqp")
             st.pyplot(fig_out)
             plt.close(fig_out)
         except Exception as e:
             st.text(opt_res.optimized_circuit.draw(output="text"))
 
     st.markdown("---")
-    st.header("3. Structural Metrics & Equivalence")
+    st.header("3. Structural metrics & equivalence")
 
     m_in = get_metrics(input_qc)
     m_out = get_metrics(opt_res.optimized_circuit)
@@ -151,10 +170,7 @@ if "opt_res" in st.session_state:
 
     with c4:
         st.markdown("**Unitary Equivalence**")
-        if opt_res.equivalent:
-            st.success("✅ PASS (Identical up to global phase)")
-        else:
-            st.error("❌ FAIL (Unitary mismatch)")
+        render_equivalence_notification(opt_res.equivalent)
 
     if opt_res.per_pass_metrics:
         with st.expander("Detailed Pass-by-Pass Telemetry"):
@@ -177,7 +193,8 @@ if "opt_res" in st.session_state:
 # Panel 4: Baseline Comparison Bar Charts (from results.csv)
 # -----------------------------------------------------------------------------
 st.markdown("---")
-st.header("4. Baseline Comparison vs. Qiskit Transpile Levels 0–3")
+st.markdown('<div id="benchmarks"></div>', unsafe_allow_html=True)
+st.header("4. Baseline comparison vs. Qiskit transpile levels 0–3")
 
 if not RESULTS_CSV_PATH.exists():
     st.warning("`results/results.csv` not found. Run `python scripts/run_benchmarks.py` to generate.")
@@ -196,12 +213,13 @@ else:
     chart_col1, chart_col2 = st.columns(2)
 
     with chart_col1:
-        st.subheader("Total Gates by Variant")
+        st.subheader("Total gates by variant")
         fig, ax = plt.subplots(figsize=(6, 3.5))
         variants = bench_df["variant"]
-        bars = ax.bar(variants, bench_df["total_gates"], color="#3b82f6")
-        ax.set_ylabel("Total Gate Count")
-        ax.set_title(f"Total Gates: {bench_to_chart}")
+        bars = ax.bar(variants, bench_df["total_gates"], color=CARBON_PALETTE[0], width=0.55)
+        ax.set_ylabel("Total gate count")
+        ax.set_title(f"Total gates: {bench_to_chart}")
+        style_carbon_ax(ax)
         plt.xticks(rotation=45, ha="right")
         for bar in bars:
             height = bar.get_height()
@@ -213,17 +231,20 @@ else:
                 ha="center",
                 va="bottom",
                 fontsize=8,
+                fontweight="bold",
+                color="#161616",
             )
         plt.tight_layout()
         st.pyplot(fig)
         plt.close(fig)
 
     with chart_col2:
-        st.subheader("Two-Qubit Gates (CX) by Variant")
+        st.subheader("Two-qubit gates (CX) by variant")
         fig, ax = plt.subplots(figsize=(6, 3.5))
-        bars = ax.bar(variants, bench_df["two_qubit_gates"], color="#10b981")
-        ax.set_ylabel("Two-Qubit Gate Count")
-        ax.set_title(f"Two-Qubit Gates: {bench_to_chart}")
+        bars = ax.bar(variants, bench_df["two_qubit_gates"], color=CARBON_PALETTE[1], width=0.55)
+        ax.set_ylabel("Two-qubit gate count")
+        ax.set_title(f"Two-qubit gates: {bench_to_chart}")
+        style_carbon_ax(ax)
         plt.xticks(rotation=45, ha="right")
         for bar in bars:
             height = bar.get_height()
@@ -235,6 +256,8 @@ else:
                 ha="center",
                 va="bottom",
                 fontsize=8,
+                fontweight="bold",
+                color="#161616",
             )
         plt.tight_layout()
         st.pyplot(fig)
@@ -244,11 +267,12 @@ else:
     # Panel 5: Noisy Simulation Fidelity with Error Bars
     # -------------------------------------------------------------------------
     st.markdown("---")
-    st.header("5. Noisy Simulation Fidelity & Empirical Success")
+    st.markdown('<div id="noisy-simulation"></div>', unsafe_allow_html=True)
+    st.header("5. Noisy simulation fidelity & empirical success")
     st.caption(
         "Evaluated via **noisy simulation using IBM device noise models** (`FakeSherbrooke`), "
         "executed over 3 independent seeds (42, 43, 44) with 4096 shots per run. "
-        "Error bars represent ±1 sample standard deviation."
+        "Error bars represent ±1 sample standard deviation. Note: Y-axis begins at zero."
     )
 
     has_noisy_data = bench_df["hellinger_mean"].notna() & (bench_df["hellinger_mean"] != "")
@@ -268,38 +292,44 @@ else:
         f_col1, f_col2 = st.columns(2)
 
         with f_col1:
-            st.subheader("Hellinger Fidelity vs Ideal Distribution")
+            st.subheader("Hellinger fidelity vs ideal distribution")
             fig, ax = plt.subplots(figsize=(6, 3.5))
             ax.bar(
                 noisy_sub["variant"],
                 noisy_sub["hellinger_mean"],
                 yerr=noisy_sub["hellinger_std"],
-                capsize=5,
-                color="#8b5cf6",
-                alpha=0.85,
+                capsize=4,
+                color=CARBON_PALETTE[0],
+                ecolor="#161616",
+                alpha=0.9,
+                width=0.55,
             )
             ax.set_ylim(0, 1.05)
-            ax.set_ylabel("Hellinger Fidelity")
-            ax.set_title(f"Hellinger Fidelity: {bench_to_chart}")
+            ax.set_ylabel("Hellinger fidelity")
+            ax.set_title(f"Hellinger fidelity: {bench_to_chart}")
+            style_carbon_ax(ax)
             plt.xticks(rotation=45, ha="right")
             plt.tight_layout()
             st.pyplot(fig)
             plt.close(fig)
 
         with f_col2:
-            st.subheader("Empirical Success Probability")
+            st.subheader("Empirical success probability")
             fig, ax = plt.subplots(figsize=(6, 3.5))
             ax.bar(
                 noisy_sub["variant"],
                 noisy_sub["success_prob_mean"],
                 yerr=noisy_sub["success_prob_std"],
-                capsize=5,
-                color="#f59e0b",
-                alpha=0.85,
+                capsize=4,
+                color=CARBON_PALETTE[1],
+                ecolor="#161616",
+                alpha=0.9,
+                width=0.55,
             )
             ax.set_ylim(0, 1.05)
-            ax.set_ylabel("Success Probability")
-            ax.set_title(f"Success Probability: {bench_to_chart}")
+            ax.set_ylabel("Success probability")
+            ax.set_title(f"Success probability: {bench_to_chart}")
+            style_carbon_ax(ax)
             plt.xticks(rotation=45, ha="right")
             plt.tight_layout()
             st.pyplot(fig)
@@ -309,7 +339,7 @@ else:
     # Panel 6: Plain "Honest Results" Note (Wins / Ties / Losses vs Qiskit)
     # -------------------------------------------------------------------------
     st.markdown("---")
-    st.header("6. Honest Results: Empirical Comparison vs. Qiskit")
+    st.header("6. Honest results: Empirical comparison vs. Qiskit")
     st.markdown(
         "Summary of head-to-head performance across all 17 benchmarks in `results/results.csv`. "
         "Strictly measured against Qiskit's built-in transpiler levels 0 to 3 in the same basis `(rz, sx, x, cx)`."
@@ -366,6 +396,7 @@ aggregated_hw = aggregate_hardware_results(HARDWARE_DIR) if HARDWARE_DIR.exists(
 
 if aggregated_hw:
     st.markdown("---")
+    st.markdown('<div id="hardware-runs"></div>', unsafe_allow_html=True)
     st.header("7. Hardware run (saved results)")
     st.markdown(
         "Execution results from IBM Quantum hardware submissions. "
@@ -436,16 +467,16 @@ if aggregated_hw:
                 else:
                     bar_errs.append(target_std or 0.0)
 
-    st.subheader("Post-Transpile Metrics & Aggregate Results")
+    st.subheader("Post-transpile metrics & aggregate results")
     st.dataframe(pd.DataFrame(table_rows), width="stretch")
 
     # Bar chart of mean performance with error bars and per-run scatter points
     if bar_means:
         metric_label = "Success Probability" if any(variants_summary[v].get("success_probability_mean") is not None for v in bar_variants) else "Hellinger Fidelity"
-        st.subheader(f"{metric_label} Across Runs (Mean with Error Bars & Per-Run Points)")
+        st.subheader(f"{metric_label} across runs (Mean with error bars & per-run points)")
 
         fig_hw, ax_hw = plt.subplots(figsize=(8, 4.5))
-        colors = ["#7f7f7f", "#2ca02c", "#1f77b4", "#ff7f0e"][:len(bar_variants)]
+        colors = CARBON_PALETTE[:len(bar_variants)]
         x_indices = np.arange(len(bar_variants))
 
         bars = ax_hw.bar(
@@ -454,10 +485,13 @@ if aggregated_hw:
             yerr=bar_errs,
             capsize=6,
             color=colors,
-            alpha=0.75,
-            edgecolor="black",
+            alpha=0.85,
+            edgecolor="#161616",
+            linewidth=1.0,
+            ecolor="#161616",
             label="Mean (+/- Std Dev)",
             zorder=3,
+            width=0.55,
         )
 
         # Overlay individual per-run points
@@ -468,12 +502,12 @@ if aggregated_hw:
             vals = [v for v in vals if v is not None]
 
             if vals:
-                jitter = np.linspace(-0.12, 0.12, len(vals)) if len(vals) > 1 else [0.0]
+                jitter = np.linspace(-0.1, 0.1, len(vals)) if len(vals) > 1 else [0.0]
                 ax_hw.scatter(
                     [idx + j for j in jitter],
                     vals,
-                    color="#111111",
-                    edgecolor="white",
+                    color="#161616",
+                    edgecolor="#ffffff",
                     linewidth=1.2,
                     s=55,
                     zorder=5,
@@ -486,9 +520,9 @@ if aggregated_hw:
         ax_hw.set_ylabel(metric_label)
         max_y = max(bar_means) if bar_means else 1.0
         ax_hw.set_ylim(0, min(1.1, max_y * 1.25 if max_y > 0 else 1.0))
-        ax_hw.set_title(f"IBM Hardware Evaluation: {selected_bench} ({backends_str})", fontweight="bold")
-        ax_hw.grid(True, linestyle="--", alpha=0.3, axis="y", zorder=1)
-        ax_hw.legend(loc="lower right")
+        ax_hw.set_title(f"Hardware execution: {selected_bench} ({backends_str})", fontweight="bold")
+        style_carbon_ax(ax_hw)
+        ax_hw.legend(loc="upper center", bbox_to_anchor=(0.5, -0.2), frameon=False, ncol=2)
 
         for bar, m_val in zip(bars, bar_means):
             yval = bar.get_height()
@@ -500,12 +534,14 @@ if aggregated_hw:
                 va="bottom",
                 fontsize=9,
                 fontweight="bold",
+                color="#161616",
             )
 
         st.pyplot(fig_hw)
         plt.close(fig_hw)
+        st.caption("Note: Y-axis begins at zero. Points represent individual run observations; bars show mean with error bars.")
 
-    # Drill-down expander for individual run details
+    # Drill-down expander for individual run details (styled as Carbon jobs list)
     all_runs = []
     for v_stats in variants_summary.values():
         for pt in v_stats.get("run_points", []):
@@ -513,16 +549,16 @@ if aggregated_hw:
                 all_runs.append(pt)
 
     if all_runs:
-        with st.expander("🔍 Individual Run Details (Job IDs & Timestamps)"):
+        with st.expander("Individual run details (Hardware jobs list)"):
             run_table = []
             for r in all_runs:
                 run_table.append({
-                    "Run #": r.get("run_idx"),
-                    "Job ID": r.get("job_id"),
-                    "Backend": r.get("backend"),
-                    "Timestamp": str(r.get("timestamp", ""))[:19].replace("T", " "),
-                    "Success Prob": f"{r.get('success_probability'):.4f}" if r.get("success_probability") is not None else "N/A",
-                    "Hellinger Fidelity": f"{r.get('hellinger_fidelity'):.4f}" if r.get("hellinger_fidelity") is not None else "N/A",
+                    "Job ID": str(r.get("job_id")),
+                    "Backend": str(r.get("backend")),
+                    "Benchmark": selected_bench,
+                    "Shots": 2000,
+                    "Created": str(r.get("timestamp", ""))[:19].replace("T", " "),
+                    "Status": "Completed",
                 })
             st.dataframe(pd.DataFrame(run_table), width="stretch")
 
@@ -539,13 +575,26 @@ if HARDWARE_DIR.exists():
             continue
 
 if dry_run_records:
-    with st.expander("📁 Offline Device Model Simulation Runs (Dry-Run Mode)"):
+    with st.expander("Offline device model simulation runs (Dry-run mode)"):
         st.markdown(
             "Saved execution records from offline dry-run **simulation** using IBM device noise models. "
             "These are classical simulations and not hardware executions."
         )
+        sim_jobs = []
+        for s_name, s_rec in dry_run_records:
+            sim_jobs.append({
+                "Job ID": str(s_rec.get("job_id")),
+                "Backend": str(s_rec.get("backend")),
+                "Benchmark": str(s_rec.get("benchmark")),
+                "Shots": s_rec.get("shots", 0),
+                "Created": str(s_rec.get("timestamp", ""))[:19].replace("T", " "),
+                "Status": "Simulation",
+            })
+        st.markdown("**Simulation jobs list**")
+        st.dataframe(pd.DataFrame(sim_jobs), width="stretch")
+
         sim_name = st.selectbox(
-            "Select simulation record to preview:",
+            "Select simulation record to preview metrics:",
             options=[name for name, _ in dry_run_records],
             key="sim_record_select",
         )
@@ -565,5 +614,8 @@ if dry_run_records:
                 "Hellinger Fidelity": f"{v_data.get('hellinger_fidelity'):.4f}" if v_data.get("hellinger_fidelity") is not None else "N/A",
             })
         st.dataframe(pd.DataFrame(sim_rows), width="stretch")
+
+# Render Carbon and trademark attribution footer
+render_footer()
 
 

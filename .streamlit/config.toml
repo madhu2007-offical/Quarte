@@ -3,10 +3,15 @@ headless = true
 port = 8501
 enableCORS = false
 enableXsrfProtection = true
+enableStaticServing = true
 
 [browser]
 gatherUsageStats = false
 
 [theme]
 base = "light"
-primaryColor = "#2ca02c"
+primaryColor = "#0f62fe"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f4f4f4"
+textColor = "#161616"
+font = "sans serif"
