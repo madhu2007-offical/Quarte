@@ -1,5 +1,6 @@
 <p align="center">
-  <img src="docs/assets/banner.svg" alt="Quarte: verified gate reduction for noisy quantum circuits" width="100%">
+  <img src="<img width="1600" height="533" alt="image" src="https://github.com/user-attachments/assets/176b0b2d-5e3c-4bf2-bed5-63b3170149e2" />
+" alt="Quarte: verified gate reduction for noisy quantum circuits" width="100%">
 </p>
 
 <p align="center">
