@@ -1,245 +1,239 @@
-# Quantum Circuit Gate-Reduction Optimizer
+<p align="center">
+  <img src="docs/assets/banner.svg" alt="Quarte: verified gate reduction for noisy quantum circuits" width="100%">
+</p>
 
-## 1. Project Summary
+<p align="center">
+  <img alt="python" src="https://img.shields.io/badge/python-3.12%2B-2f5bd8">
+  <img alt="qiskit" src="https://img.shields.io/badge/built%20on-Qiskit-14202e">
+  <img alt="verification" src="https://img.shields.io/badge/every%20output-equivalence%20checked-1f8a5b">
+  <img alt="status" src="https://img.shields.io/badge/status-research%20prototype-a86a12">
+</p>
 
-A classical, explainable quantum circuit gate-reduction optimizer built on Qiskit. The optimizer takes an input `QuantumCircuit`, applies custom modular DAG-based optimization passes, verifies that the resulting circuit is mathematically and unitarily equivalent to the input, and evaluates gate count, depth reduction, fidelity, and hardware execution against Qiskit's built-in transpiler (`optimization_level=0..3`).
+**Quarte** is a classical, explainable optimizer for quantum circuits. It rewrites a circuit into a shorter one, proves the result computes the same unitary up to a global phase, and measures the outcome against Qiskit's transpiler, in noisy simulation and on IBM hardware.
 
-### Core Optimization Pipeline
-- **Pass 1 (`CancellationPass`)**: Operates on Qiskit's `DAGCircuit` to eliminate adjacent self-inverse gates ($H-H$, $X-X$, $CX-CX$, etc.), inverse conjugate pairs ($S-S^\dagger$, $T-T^\dagger$, $SX-SX^\dagger$), compact $SX-SX \to X$, and merge collinear rotation gates along matching Pauli axes ($RZ, RX, RY, P$), removing any rotation with angle $\approx 0 \pmod{2\pi}$. See [docs/pass1_cancellation.md](docs/pass1_cancellation.md).
-- **Pass 2 (`CommutationPass`)**: Exploits algebraic commutation rules (disjoint support, diagonal gates on $CX$ controls, $X$-type gates on $CX$ targets, shared controls/targets) to slide gates forward speculatively up to a lookahead horizon. If a slide enables a cancellation or merge, the rewrite is committed; otherwise, all changes are rolled back bit-for-bit. See [docs/pass2_commutation.md](docs/pass2_commutation.md).
-- **Unitary Equivalence Verification (`is_equivalent`)**: Uses Qiskit's `Operator(qc).equiv(Operator(target))` to rigorously prove that the optimized circuit is identical up to global phase. Enforces a safety limit of $\le 10$ qubits to prevent state-space memory exhaustion.
-- **Evaluation & Baselines**: Compares optimized circuits against Qiskit transpilation levels 0, 1, 2, and 3 in the identical basis $\{rz, sx, x, cx\}$.
-- **Statistical Noisy Simulation**: Evaluates circuit execution under `FakeSherbrooke` device noise models across multiple random seeds, tracking Hellinger fidelity and success probability distributions with error bars.
-- **Physical Hardware Execution**: Evaluates compiler variants on IBM Quantum hardware (e.g. `ibm_fez`, Heron r2) with fair physical layout selection and a single `SamplerV2` job. See [docs/hardware_run.md](docs/hardware_run.md).
+It is a transparent research prototype. It matches Qiskit's optimization level 1 on two-qubit gate count across our benchmark set and is beaten by levels 2 and 3 on structured circuits. The [claims ledger](#8-claims-ledger-what-is-and-is-not-supported) states exactly what the evidence supports.
 
 ---
 
-## 2. Setup Instructions
+## Contents
 
-### Prerequisites
-- Python 3.12+
-- `git`
-- (Optional) `docker` & `docker-compose`
+1. [Motivation](#1-motivation) · 2. [Problem formulation](#2-problem-formulation) · 3. [Method](#3-method) · 4. [Verification](#4-verification) · 5. [Experimental protocol](#5-experimental-protocol) · 6. [Results](#6-results) · 7. [Hardware run](#7-hardware-run) · 8. [Claims ledger](#8-claims-ledger-what-is-and-is-not-supported) · 9. [Threats to validity](#9-threats-to-validity) · 10. [Quickstart](#10-quickstart) · 11. [Repository map](#11-repository-map) · 12. [Reproducibility](#12-reproducibility) · 13. [Security](#13-security) · 14. [Related work](#14-related-work) · 15. [FAQ](#15-faq)
 
-### Environment Setup
-Clone or navigate to the repository:
-```bash
-git clone https://github.com/madhu2007-offical/Quarte.git
-cd Quarte
+---
+
+## 1. Motivation
+
+Near-term (NISQ) processors have no error correction. Each gate fails with some small probability, two-qubit gates fail most, and idle time adds decoherence. The probability that a circuit returns the intended answer therefore falls with gate count and depth. Circuits produced by people or libraries often contain structure that can be removed without changing what they compute: a gate followed by its inverse, or rotations that could be one.
+
+Optimal compilation is a hard combinatorial problem, and production compilers rely on heuristics. We study a deliberately narrow, inspectable slice of that space: local rewrite rules with a correctness proof per rule and a mechanical check on every output.
+
+<p align="center">
+<sub><i>Suggested figure:</i> three-panel schematic (where the problem begins, the problem, what we solve). See <code>docs/figures.md</code>.</sub>
+</p>
+
+## 2. Problem formulation
+
+Let a circuit $C$ over a gate set $\mathcal{G}$ implement the unitary $U(C)$. We seek $C'$ with
+
+$$U(C') = e^{i\varphi}\,U(C)\quad\text{for some }\varphi\in\mathbb{R},$$
+
+minimizing a cost that prioritizes the two-qubit gate count $n_{2q}$, then total gate count $n$, then depth $d$. The global phase $e^{i\varphi}$ is physically unobservable, so equivalence is taken modulo phase. Measurements, barriers and classical control are never rewritten across.
+
+## 3. Method
+
+The circuit is held as a directed acyclic graph (DAG): nodes are gates, edges are qubit wires. Two gates are **adjacent** only if nothing else touches any of their qubits between them. This strict, wire-by-wire test is the main guard against illegal rewrites; Qiskit's `quantum_successors` alone is not enough, because it can report two gates as neighbours when a third intervenes on a different wire.
+
+```mermaid
+flowchart TD
+  A[Input circuit: Qiskit object or QASM] --> B[Convert to DAG]
+  B --> C[Optional: translate to basis rz, sx, x, cx]
+  C --> D
+  subgraph D[Fixed-point loop, at most 20 rounds]
+    P1[Pass 1: cancel and merge] --> P2[Pass 2: commute and slide]
+    P2 -->|repeat until no change| P1
+  end
+  D --> E{Unitary equal up to global phase?}
+  E -->|yes| F[Return optimized circuit]
+  E -->|no| G[Reject, log which pass failed]
 ```
 
-Create and activate a virtual environment:
-```bash
-# On Linux / macOS
-python -m venv .venv
-source .venv/bin/activate
+### 3.1 Pass 1: cancellation and merging
 
-# On Windows (PowerShell)
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-```
+| Rule | Identity used |
+|---|---|
+| Inverse pairs: H·H, X·X, Y·Y, Z·Z, CX·CX (same control and target), CZ·CZ, SWAP·SWAP | $U U^{\dagger} = I$ |
+| Adjoint pairs: S·S†, T·T†, SX·SX† (either order) | $U U^{\dagger} = I$ |
+| SX·SX → X | $\sqrt{X}\sqrt{X} = X$ |
+| Same-axis rotations: $R_\sigma(a)R_\sigma(b) \to R_\sigma(a+b)$ for RZ, RX, RY, P | $e^{-ia\sigma/2}e^{-ib\sigma/2}=e^{-i(a+b)\sigma/2}$ |
+| Rotation by a multiple of $2\pi$ removed (tolerance $10^{-9}$) | equals $\pm I$, i.e. identity up to global phase |
 
-Install pinned dependencies:
+CX(0,1) followed by CX(1,0) is **not** an inverse pair and is never cancelled. Symbolic parameters are skipped. The pass repeats to a fixed point, because one removal can expose another.
+
+### 3.2 Pass 2: commutation with rollback
+
+A gate may slide past a neighbour only if the two commute. Rules are deliberately conservative; when unsure the answer is "does not commute".
+
+| Gate A | Gate B | Commute? | Reason |
+|---|---|---|---|
+| any | any, disjoint qubits | yes | act on separate tensor factors |
+| diagonal (Z, S, S†, T, T†, RZ, P) | CX, on its **control** | yes | CX = \|0⟩⟨0\|⊗I + \|1⟩⟨1\|⊗X, and diagonal gates commute with the projectors |
+| X-type (X, RX, SX, SX†) | CX, on its **target** | yes | commutes with X |
+| diagonal | CZ, either qubit | yes | all diagonal |
+| CX, CX sharing only a control, or only a target | | yes | |
+| diagonal on CX **target**; X-type on CX **control** | | **no** | changes the phase or the control condition |
+| CX(a,b), CX(b,c); CX(a,b), CX(b,a) | | **no** | target of one is control of the other |
+
+Lookahead is bounded (10 gates). A slide is committed only if it enables a cancellation or merge, so gate count strictly drops; otherwise the DAG is restored, and a test asserts the restored circuit is instruction-for-instruction identical, not just equivalent.
+
+**Worked example.** `rz(0.4) q0; cx q0,q1; rz(0.6) q0` has three gates and Pass 1 cannot reduce it. RZ commutes with the CX control, so Pass 2 slides it adjacent to the second RZ, Pass 1 merges them to `rz(1.0)`, and the result has two gates.
+
+### 3.3 Correctness argument
+
+Each rewrite replaces a subcircuit by one with an equal unitary (up to phase) acting on the same qubits, so the composition of rewrites preserves $U(C)$ up to phase. We do not rely on this argument alone; section 4 checks it mechanically.
+
+## 4. Verification
+
+`optimizer/equivalence.py` strips measurements and barriers, builds both unitaries, and tests equality up to global phase with `Operator.equiv`. The cost grows as $4^{n}$ in memory, so the check is limited to **10 qubits**. The pipeline never returns an unchecked circuit silently: on failure it reports `equivalent=False` and names the pass.
+
+Tests cover: identical circuits, an injected extra gate (must fail), global-phase-only differences, qubit-count mismatch, measurement handling, every rule with a positive and a negative case, the CX chain and reversed-CX cases, bit-for-bit rollback, and fixed-seed random-circuit fuzzing with a broad gate mix.
+
+## 5. Experimental protocol
+
+- **Benchmarks (17):** GHZ, QFT, QFT followed by its inverse (known answer), Bell, a small Grover search, ripple-carry adders, and eight seeded random circuits with deliberate redundancy.
+- **Variants (7):** original, Qiskit levels 0 to 3, `ours` (`optimize(..., translate_to_basis=True)`), and `ours_highlevel` (passes run before basis translation).
+- **Fairness rule:** every variant is compiled to the same basis `{rz, sx, x, cx}`; hardware variants share one physical layout, backend, shot count and transpiler settings.
+- **Noisy simulation:** Qiskit Aer with a fake IBM backend's noise model, three seeds, circuits of at most 7 qubits with a known ideal distribution.
+- **Output:** 17 × 7 = 119 rows in `results/results.csv`.
+
+## 6. Results
+
+<!-- RESULTS:START -->
+Wins, ties and losses of `ours` against Qiskit, by circuit count (17 circuits). A tie means exactly equal counts.
+
+| Metric | vs L0 | vs L1 | vs L2 | vs L3 |
+|---|---|---|---|---|
+| Two-qubit gates | 6 W / 11 T / 0 L | 0 W / 17 T / 0 L | 0 W / 13 T / 4 L | 0 W / 13 T / 4 L |
+| Total gates | 14 / 3 / 0 | 6 / 5 / 6 | 0 / 8 / 9 | 0 / 8 / 9 |
+| Depth | 14 / 3 / 0 | 6 / 5 / 6 | 2 / 7 / 8 | 2 / 7 / 8 |
+<!-- RESULTS:END -->
+
+Reading guide:
+
+- Beating level 0 is the weakest claim, since level 0 does almost no optimization.
+- **Tie with level 1 on two-qubit gates in 17 of 17 circuits** is the central result.
+- Levels 2 and 3 win on four circuits, mainly arithmetic and Grover, where they re-synthesize blocks of gates. Our local rewrite rules do not.
+- Gate-count reductions of roughly one third to two thirds appear only on the synthetic redundant circuits and are not a general claim.
+
+## 7. Hardware run
+
+One job on `ibm_fez` (Heron r2, native `cz`): QFT followed by inverse QFT on three qubits, answer `101`, four variants, 2,000 shots each, identical physical qubits.
+
+<!-- RESULTS:START -->
+| Variant | Total gates | CZ gates | Depth | Success probability |
+|---|---|---|---|---|
+| original | 182 | 24 | 123 | 0.8980 ± 0.0068 |
+| ours | 131 | 18 | 91 | 0.9065 ± 0.0065 |
+| Qiskit L1 | 130 | 18 | 91 | 0.9125 ± 0.0063 |
+| Qiskit L3 | 2 | 0 | 1 | 0.9805 ± 0.0031 |
+<!-- RESULTS:END -->
+
+Errors are one binomial standard error and capture shot noise only, not drift between runs. The gain of `ours` over `original` is +0.0085 against a combined standard error of about 0.009, so it is **within noise**. Qiskit L3 wins because QFT followed by inverse QFT is the identity and level 3 detects it, which makes this circuit a weak probe of optimizer quality. Further runs, GHZ and a redundant random circuit are in `docs/hardware_run.md` as they are added.
+
+## 8. Claims ledger: what is and is not supported
+
+| Claim | Status |
+|---|---|
+| Optimized circuits equal the originals up to global phase | **Supported** (checked on every optimized circuit, up to 10 qubits) |
+| Matches Qiskit L1 on two-qubit gate count | **Supported** (17 of 17 benchmarks) |
+| Fewer gates and lower depth than the unoptimized circuit on hardware | **Supported** (24 → 18 CZ, depth 123 → 91, one run) |
+| Higher success probability on hardware | **Suggestive only** (within error bars) |
+| Better than Qiskit L2 or L3 | **Not supported** (they win on structured circuits) |
+| General reduction of 35% or more | **Not supported** (synthetic redundant sets only) |
+| Simulated fidelity predicts hardware fidelity | **Not claimed** (a noise model is not a measurement) |
+
+## 9. Threats to validity
+
+- **Benchmark selection.** Seventeen circuits, several synthetic. Redundant random circuits favour any cancellation pass.
+- **Baseline comparison.** Qiskit's levels include techniques we lack; results depend on the shared basis and seed chosen.
+- **Hardware evidence.** Few runs, one device at a time, and device noise drifts between days.
+- **Simulation.** A fake backend snapshot approximates a device at one moment.
+- **Small seed count.** Three seeds give a rough standard deviation.
+- **Scope cuts.** Routing onto a device coupling map was not implemented; equivalence checking is limited to 10 qubits.
+- **AI-assisted development.** Parts of the code and documentation were drafted with AI coding assistants. Correctness rests on the tests and the equivalence checker, not on trust in generated code. <!-- TODO(authors): state the extent of AI assistance as the event rules require. -->
+
+## 10. Quickstart
+
 ```bash
+git clone https://github.com/madhu2007-offical/Quarte && cd Quarte
+python -m venv .venv
+source .venv/bin/activate            # Windows PowerShell: .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-```
-
----
-
-## 3. How to Run Tests
-
-Execute the complete test suite (**99 passed, 1 skipped**) using `pytest`:
-```bash
 pytest -q
 ```
 
-The test suite covers:
-- Scaffolding and interface compliance ([`tests/test_smoke.py`](tests/test_smoke.py))
-- Hardened equivalence verification and qubit bounds ([`tests/test_equivalence.py`](tests/test_equivalence.py))
-- Pass 1 cancellation, rotation merging, and wire adjacency ([`tests/test_cancellation.py`](tests/test_cancellation.py))
-- Pass 2 commutation rules, slide lookahead, and bit-for-bit rollback ([`tests/test_commutation.py`](tests/test_commutation.py))
-- Randomized circuit optimization fuzzing across 8 seeds ([`tests/test_random_circuits.py`](tests/test_random_circuits.py))
-- Structural metrics extraction and depth calculations ([`tests/test_metrics.py`](tests/test_metrics.py))
-- Noisy simulation and Hellinger fidelity calculations ([`tests/test_fidelity.py`](tests/test_fidelity.py))
-- End-to-end benchmark sweep runner ([`tests/test_benchmarks_runner.py`](tests/test_benchmarks_runner.py))
-- FastAPI endpoints and Streamlit dashboard smoke import ([`tests/test_api.py`](tests/test_api.py))
-- Hardware workflow, dry-run isolation, schema validation, and layout fairness ([`tests/test_hardware.py`](tests/test_hardware.py))
-
----
-
-## 4. Local Execution & Launch Commands
-
-### 4.1 Launch Streamlit Interactive Dashboard
-Start the visual dashboard:
 ```bash
-streamlit run dashboard/app.py --server.port 8501
+uvicorn api.main:app --port 8000                    # API, Swagger at http://localhost:8000/docs
+streamlit run dashboard/app.py --server.port 8501   # dashboard, works offline from saved results
 ```
-- Dashboard URL: `http://localhost:8501`
 
-**Dashboard Features (7 Panels)**:
-1. **Circuit Selection & Controls**: Pick built-in benchmarks or upload/paste OpenQASM 2.0.
-2. **Before & After Circuit Drawings**: Side-by-side Matplotlib circuit schematics.
-3. **Metrics Table & Verification Badge**: Immediate "Equivalent: PASS" indicator and pass telemetry.
-4. **Baseline Comparisons**: Gate count and depth charts against Qiskit L0–L3.
-5. **Noisy Simulation Fidelity**: Hellinger fidelity and success rate with error bars across 3 random seeds.
-6. **Honest Results Summary**: Explicit Wins/Ties/Losses table vs Qiskit L0–L3.
-7. **Hardware Run Results**: Activates when hardware runs are recorded; displays physical layout, metrics table, and success probability bar chart with binomial error bars.
+```python
+from benchmarks.generators import qft
+from optimizer.pipeline import optimize
 
-### 4.2 Launch FastAPI REST Service
-Start the Uvicorn web server:
-```bash
-uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+res = optimize(qft(3), translate_to_basis=True)
+print(res.equivalent, res.per_pass_metrics)
 ```
-- API Base URL: `http://localhost:8000`
-- Interactive Swagger UI: `http://localhost:8000/docs`
-- Endpoints: `GET /benchmarks`, `GET /benchmarks/{name}`, `POST /optimize`, `GET /results`
 
-### 4.3 IBM Quantum Hardware Execution Workflow
-The script [`hardware/run_ibm.py`](hardware/run_ibm.py) supports both offline dry-run simulation and real hardware submission:
+Hardware (optional; needs your own IBM Quantum account on the free Open Plan):
 
 ```bash
-# 1. Safe offline dry run (default: FakeSherbrooke, 2000 shots, no cloud calls)
-python hardware/run_ibm.py --benchmark qft_then_inverse_3 --shots 2000
-
-# 2. Real IBM Quantum Cloud execution (auto-selects least-busy operational backend)
-python hardware/run_ibm.py --benchmark qft_then_inverse_3 --shots 2000 --submit
-
-# 3. Explicit backend target (e.g. ibm_fez)
-python hardware/run_ibm.py --benchmark qft_then_inverse_3 --backend ibm_fez --shots 2000 --submit
+python hardware/run_ibm.py --benchmark qft_then_inverse_3                  # dry run, no cloud calls
+python hardware/run_ibm.py --benchmark qft_then_inverse_3 --shots 2000 \
+       --repeats 3 --max-qpu-seconds 60 --submit                           # real submission
+python scripts/aggregate_hardware.py
 ```
+
+## 11. Repository map
+
+| Path | Purpose |
+|---|---|
+| `optimizer/` | `cancellation.py` (Pass 1), `commutation.py` and `commutation_rules.py` (Pass 2), `equivalence.py`, `pipeline.py`, `base.py` (pass interface) |
+| `benchmarks/` | Seeded circuit generators and exported QASM |
+| `metrics/` | Gate count, two-qubit gate count, depth |
+| `baselines/` | Qiskit transpile at levels 0 to 3 in the shared basis |
+| `simulation/` | Noisy simulation and fidelity measures |
+| `hardware/` | Dry-run and submit workflow with a QPU budget guard |
+| `api/`, `dashboard/` | FastAPI service and Streamlit dashboard (read-only) |
+| `scripts/` | Benchmark sweep, hardware aggregation, figures |
+| `results/` | `results.csv` and saved hardware JSON |
+| `tests/`, `docs/` | Test suite and long-form documentation |
+
+## 12. Reproducibility
+
+Dependencies are pinned in `requirements.txt`. All generators and simulations use fixed seeds. `python scripts/run_benchmarks.py` regenerates `results/results.csv`; no result number in this document is typed by hand, and the tables above are generated from the saved files (`scripts/make_readme_tables.py`).
+
+## 13. Security
+
+IBM credentials are read only from a saved Qiskit account or a git-ignored `.env`. They are never logged or committed. The dashboard and API cannot submit hardware jobs.
+
+## 14. Related work
+
+Rotation merging and gate cancellation follow the line of work on automated optimization of circuits with continuous parameters (Nam et al., arXiv:1710.07345). Heuristic lookahead routing is the subject of SABRE (Li, Ding, Xie, arXiv:1809.02573), the basis of Qiskit's `SabreSwap`, which we did not implement. TKET (Sivarajah et al., arXiv:2003.10611) is a retargetable NISQ compiler. Identifiers were collected during scoping and should be re-checked before citing.
+
+## 15. FAQ
+
+**How do you know a circuit is unchanged?** We compute both unitaries and compare them up to global phase. This is exact for up to 10 qubits.
+
+**Why not just use Qiskit?** Use it. Quarte is a transparent, inspectable implementation of a subset of its techniques, with a correctness check on every output, built to study where local rewriting suffices.
+
+**Why does Qiskit level 3 beat you on QFT followed by inverse QFT?** That circuit equals the identity, and level 3 re-synthesizes blocks until it finds that.
+
+**Why was routing cut?** It needs a permutation-aware equivalence check and a careful evaluation, which did not fit the time. It is the first extension we would add.
+
+**What does the hardware run show?** Fewer entangling gates and lower depth for the same computation, and a success probability that rose slightly within noise. It does not show a proven fidelity gain.
+
+**What next?** More repeated hardware runs and circuits that cannot collapse to the identity, block resynthesis, routing, and a sampling-based equivalence check beyond 10 qubits.
 
 ---
 
-## 5. Results Summary
-
-### 5.1 Comprehensive Benchmark Sweep (`results/results.csv`)
-All evaluation metrics are dynamically tracked and recorded in [`results/results.csv`](results/results.csv), comprising 119 evaluation rows across 17 benchmark circuits and 7 compiler variants (`original`, `qiskit_L0`, `qiskit_L1`, `qiskit_L2`, `qiskit_L3`, `ours`, and `ours_highlevel`).
-
-Head-to-head comparison across all 17 benchmarks in the basis $\{rz, sx, x, cx\}$:
-
-| Metric | vs `qiskit_L0` | vs `qiskit_L1` | vs `qiskit_L2` | vs `qiskit_L3` |
-| :--- | :---: | :---: | :---: | :---: |
-| **Total Gate Count** | **14 Wins**, 3 Ties, 0 Losses | **6 Wins**, 5 Ties, 6 Losses | 0 Wins, 8 Ties, 9 Losses | 0 Wins, 8 Ties, 9 Losses |
-| **Two-Qubit (CX) Gates** | **6 Wins**, 11 Ties, 0 Losses | 0 Wins, **17 Ties**, 0 Losses | 0 Wins, 13 Ties, 4 Losses | 0 Wins, 13 Ties, 4 Losses |
-| **Circuit Depth** | **14 Wins**, 3 Ties, 0 Losses | **6 Wins**, 5 Ties, 6 Losses | **2 Wins**, 7 Ties, 8 Losses | **2 Wins**, 7 Ties, 8 Losses |
-
-- **vs Qiskit L0**: Our optimizer beats Qiskit L0 on 14 circuits on total gates/depth and eliminates CX gates where L0 leaves them untouched.
-- **vs Qiskit L1**: Achieves **17 ties out of 17 circuits** on two-qubit CX gates—matching Qiskit L1's entangling gate reduction perfectly across every benchmark—while beating L1 on total single-qubit gates on 6 benchmarks.
-- **vs Qiskit L2/L3**: Matches L2/L3 on 13 circuits for CX gates. Qiskit's high-level KAK unitary resynthesis finds additional cross-block CX reductions on complex arithmetic adders.
-- **Equivalence Verification**: 100% of circuits optimized by our pipeline are unitarily equivalent to their inputs up to global phase (`equivalent=True` across all 17 benchmarks).
-
----
-
-### 5.2 Physical Hardware Execution on `ibm_fez` (IBM Heron Processor)
-A live execution of all 4 compiler variants was performed on the **`ibm_fez`** superconducting quantum processor (156 qubits, Heron r2 architecture with native `cz` gates) under Job ID [`dbd6v6k24mrc73cksj10`](https://quantum.cloud.ibm.com/jobs/dbd6v6k24mrc73cksj10).
-
-All variants were compiled to the identical physical layout (`[22, 23, 24]`) using `generate_preset_pass_manager(optimization_level=0)`:
-
-| Variant | Post-Transpile Total Gates | Post-Transpile 2Q Gates (`cz`) | Post-Transpile Depth | Correct Counts (`101` / 2000) | Success Probability ($p \pm \text{stderr}$) |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| `original` | 182 | 24 | 123 | 1,796 | $0.8980 \pm 0.0068$ |
-| `ours` | **131** | **18** | **91** | **1,813** | **$0.9065 \pm 0.0065$** |
-| `qiskit_L1` | 130 | 18 | 91 | 1,825 | $0.9125 \pm 0.0063$ |
-| `qiskit_L3` | 2 | 0 | 1 | 1,961 | $0.9805 \pm 0.0031$ |
-
-**Key Findings on Physical Hardware**:
-- `ours` dropped two-qubit `cz` gates from 24 to 18 (matching `qiskit_L1`), and reduced depth from 123 to 91.
-- Physical execution success probability increased from **89.80% to 90.65%**, confirming that compiler gate reduction directly mitigates real device noise and decoherence.
-- Artifact recorded in [`results/hardware/qft_then_inverse_3_ibm_fez_20261023_014840.json`](results/hardware/qft_then_inverse_3_ibm_fez_20261023_014840.json).
-
----
-
-## 6. Deployment & Cloud Hosting
-
-### 6.1 Streamlit Community Cloud (Recommended)
-Deploy the live interactive dashboard directly from GitHub with 1 click:
-
-👉 **[Deploy to Streamlit Community Cloud](https://share.streamlit.io/deploy?repository=madhu2007-offical%2FQuarte&branch=main&mainModule=dashboard%2Fapp.py)**
-
-- **Repository**: `madhu2007-offical/Quarte`
-- **Branch**: `main`
-- **Main file path**: `dashboard/app.py`
-- Pre-configured with `.streamlit/config.toml` and pinned `requirements.txt`.
-
-### 6.2 Container Deployment (Docker & Docker Compose)
-Run both the Streamlit Dashboard (port 8501) and FastAPI Backend (port 8000) simultaneously:
-
-```bash
-docker-compose up --build
-```
-
-Or run standalone Docker containers:
-```bash
-# Build image
-docker build -t quantum-optimizer .
-
-# Run Streamlit Dashboard
-docker run -p 8501:8501 quantum-optimizer
-
-# Run FastAPI Server
-docker run -p 8000:8000 quantum-optimizer uvicorn api.main:app --host 0.0.0.0 --port 8000
-```
-
----
-
-## 7. Project Structure & File Layout
-
-```
-quantum-optimizer/
-  README.md                   # Comprehensive project reference, guides, and empirical tables
-  requirements.txt            # Pinned package versions
-  Dockerfile                  # Production multi-stage container definition
-  docker-compose.yml          # Compose file orchestrating Dashboard and API services
-  .streamlit/config.toml      # Streamlit cloud theme and headless server configuration
-  pytest.ini                  # Pytest execution configuration
-  .gitignore                  # Git exclusion rules
-  optimizer/                  # Core optimization passes and equivalence engine
-    base.py                   # OptimizationPass abstract interface
-    cancellation.py           # Pass 1: inverse pair cancellation & rotation merging
-    commutation.py            # Pass 2: speculative commutation sliding & rollback
-    commutation_rules.py      # Conservative algebraic commutation relations
-    routing.py                # Pass 3: routing interface stub (scoped out)
-    equivalence.py            # Unitary equivalence checker (Operator.equiv)
-    pipeline.py               # optimize() orchestrator with per-pass telemetry
-  benchmarks/                 # Benchmark circuit generators and OpenQASM exports
-    generators.py             # Deterministic parameterized benchmark generators
-    qasm/                     # Exported OpenQASM 2.0 files
-  metrics/                    # Circuit structural metrics
-    metrics.py                # Total gates, 2Q gates, and critical-path depth
-  baselines/                  # Qiskit transpilation baselines
-    qiskit_baseline.py        # Compiler variants (original, L0-L3, ours)
-  simulation/                 # Simulation and fidelity analysis
-    noisy_sim.py              # Noisy simulation using IBM device noise models
-    fidelity.py               # Hellinger fidelity and success probability
-  hardware/                   # IBM Quantum hardware submission and dry-run execution
-    run_ibm.py                # Fair layout finder, transpile, SamplerV2 submit & poll
-  api/                        # FastAPI REST service
-    main.py                   # API routes and Swagger documentation
-    schemas.py                # Pydantic request/response schemas
-  dashboard/                  # Interactive visual dashboard
-    app.py                    # 7-panel Streamlit application
-  scripts/                    # Benchmark execution scripts
-    run_benchmarks.py         # Full evaluation sweep and statistical runner
-  results/                    # Empirical evaluation datasets
-    results.csv               # 119-row sweep dataset across 17 benchmarks
-    hardware/                 # JSON records from dry-run and physical hardware runs
-  tests/                      # Pytest test suite (99 passed, 1 skipped)
-  docs/                       # Architectural specifications and reports
-    pass1_cancellation.md     # Mathematical specification of Pass 1
-    pass2_commutation.md      # Mathematical specification of Pass 2
-    commutation_rules.md      # Detailed commutation rules and DAG methods
-    limitations.md            # Scope boundaries and honesty disclosures
-    demo_script.md            # 3-minute live demonstration script
-    hardware_run.md           # IBM Quantum execution protocol and caveats
-```
-
----
-
-## 8. Honesty Rules
-
-1. **Equivalence & Determinism First**: No pass is committed or merged until it passes unitary equivalence verification and deterministic fixed-seed regression tests.
-2. **Fair Baseline Comparison**: All variants (`original`, `ours`, `qiskit_L0`–`L3`) are transpiled to the exact same basis set ($\{rz, sx, x, cx\}$) using identical random seeds, shot counts, and noise models.
-3. **No Hardcoded Numbers**: All summary tables, charts, and statistics in the dashboard and API are dynamically derived from [`results/results.csv`](results/results.csv) and execution JSONs in [`results/hardware/`](results/hardware/).
-4. **Empirical Claims Only (No Unsupported Hardware Claims)**: Claims are strictly limited to observable results. Simulated hardware experiments represent **noisy simulation using IBM device noise models** (`FakeSherbrooke`). Cloud runs on real hardware are strictly documented with explicit job IDs and calibration timestamps.
-5. **Contextualizing Synthetic Benchmark Gains**: Reductions of up to ~66% in total gates and ~35% in circuit depth achieved on synthetic benchmarks (`random_redundant_circuit_seed_0..7`) demonstrate the limits of DAG simplification on intentionally unoptimized circuits. These figures are **not** general claims for arbitrary production quantum algorithms.
-6. **Transparent Limitations**: Known constraints—such as Qiskit L2/L3's advantage on structured circuits via multi-qubit resynthesis and the 10-qubit boundary for unitary matrix equivalence—are openly documented in [docs/limitations.md](docs/limitations.md).
+**Authors:** <!-- TODO(authors) --> · **License:** <!-- TODO: choose a license --> · Not affiliated with or endorsed by IBM. Qiskit is used under its open-source license.
