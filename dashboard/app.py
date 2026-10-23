@@ -358,102 +358,144 @@ else:
 # Panel 7: Hardware run (saved results) - Appears ONLY if mode == "hardware"
 # -----------------------------------------------------------------------------
 HARDWARE_DIR = Path(__file__).resolve().parent.parent / "results" / "hardware"
-hardware_records = []
 
-if HARDWARE_DIR.exists():
-    import json
-    for json_file in sorted(HARDWARE_DIR.glob("*.json"), reverse=True):
-        try:
-            with open(json_file, "r", encoding="utf-8") as f:
-                content = json.load(f)
-                if content.get("mode") == "hardware":
-                    hardware_records.append((json_file.name, content))
-        except Exception:
-            continue
+# Aggregate saved hardware records (panel 7 appears ONLY if hardware records exist)
+from scripts.aggregate_hardware import aggregate_hardware_results
 
-if hardware_records:
+aggregated_hw = aggregate_hardware_results(HARDWARE_DIR) if HARDWARE_DIR.exists() else {}
+
+if aggregated_hw:
     st.markdown("---")
     st.header("7. Hardware run (saved results)")
     st.markdown(
-        "Execution results from IBM Quantum hardware submission. "
-        "Shows fair apples-to-apples comparison using identical layout and backend pass managers."
+        "Execution results from IBM Quantum hardware submissions. "
+        "Shows fair apples-to-apples comparison using identical physical layout, "
+        "with aggregate means, error bars, and per-run individual measurements."
     )
 
-    if len(hardware_records) > 1:
-        selected_file_name = st.selectbox(
-            "Select hardware execution record:",
-            options=[name for name, _ in hardware_records],
+    if len(aggregated_hw) > 1:
+        selected_bench = st.selectbox(
+            "Select hardware benchmark:",
+            options=list(aggregated_hw.keys()),
+            key="hw_bench_select",
         )
-        active_record = next(rec for name, rec in hardware_records if name == selected_file_name)
     else:
-        active_record = hardware_records[0][1]
+        selected_bench = list(aggregated_hw.keys())[0]
+
+    bench_data = aggregated_hw[selected_bench]
+    variants_summary = bench_data.get("variants", {})
 
     col_meta1, col_meta2, col_meta3, col_meta4 = st.columns(4)
     with col_meta1:
-        st.metric("Backend", active_record.get("backend", "Unknown"))
+        st.metric("Benchmark", selected_bench)
     with col_meta2:
-        st.metric("Job ID", str(active_record.get("job_id", "Unknown"))[:16] + "...")
+        backends_str = ", ".join(bench_data.get("backends", [])) or "Unknown"
+        st.metric("Backend(s)", backends_str)
     with col_meta3:
-        st.metric("Timestamp", str(active_record.get("timestamp", ""))[:19].replace("T", " "))
+        st.metric("Total Runs", bench_data.get("total_runs", 0))
     with col_meta4:
-        st.metric("Shots", active_record.get("shots", 0))
+        layout_str = str(bench_data.get("layouts", ["N/A"])[0]) if bench_data.get("layouts") else "N/A"
+        st.metric("Physical Layout", layout_str)
 
-    st.markdown(f"**Physical Qubit Layout**: `{active_record.get('layout')}`")
-
-    # Table of post-transpile metrics & success probabilities
-    variants_data = active_record.get("variants", {})
+    # Table of post-transpile metrics & aggregate results
     table_rows = []
     bar_variants = []
-    bar_probs = []
+    bar_means = []
     bar_errs = []
 
     for v_name in ["original", "ours", "qiskit_L1", "qiskit_L3"]:
-        if v_name in variants_data:
-            vd = variants_data[v_name]
-            pm = vd.get("post_transpile_metrics", {})
-            p_val = vd.get("success_probability")
-            err_val = vd.get("stderr", 0.0)
+        if v_name in variants_summary:
+            v_stats = variants_summary[v_name]
+            p_m = v_stats.get("success_probability_mean")
+            p_s = v_stats.get("success_probability_std", 0.0)
+            h_m = v_stats.get("hellinger_fidelity_mean")
+            h_s = v_stats.get("hellinger_fidelity_std", 0.0)
+
             table_rows.append({
                 "Variant": v_name,
-                "Total Gates": pm.get("total_gates", "N/A"),
-                "2Q Gates": pm.get("two_qubit_gates", "N/A"),
-                "Depth": pm.get("depth", "N/A"),
-                "Success Probability": f"{p_val:.4f} +/- {err_val:.4f}" if p_val is not None else "N/A",
-                "Hellinger Fidelity": f"{vd.get('hellinger_fidelity'):.4f}" if vd.get("hellinger_fidelity") is not None else "N/A",
+                "Runs": v_stats.get("num_runs", 0),
+                "Total Gates": v_stats.get("total_gates", "N/A"),
+                "2Q Gates": v_stats.get("two_qubit_gates", "N/A"),
+                "Depth": v_stats.get("depth", "N/A"),
+                "Success Prob (Mean +/- Std)": f"{p_m:.4f} +/- {p_s:.4f}" if p_m is not None else "N/A",
+                "Hellinger (Mean +/- Std)": f"{h_m:.4f} +/- {h_s:.4f}" if h_m is not None else "N/A",
             })
-            if p_val is not None:
-                bar_variants.append(v_name)
-                bar_probs.append(p_val)
-                bar_errs.append(err_val or 0.0)
 
-    st.subheader("Post-Transpile Metrics & Success Probabilities")
+            # Prefer success probability for bar chart; fallback to Hellinger fidelity
+            target_mean = p_m if p_m is not None else h_m
+            target_std = p_s if p_m is not None else h_s
+
+            if target_mean is not None:
+                bar_variants.append(v_name)
+                bar_means.append(target_mean)
+                # If single run, use individual run's standard error if available
+                if v_stats.get("num_runs", 0) <= 1 and v_stats.get("run_points"):
+                    first_pt = v_stats["run_points"][0]
+                    single_err = first_pt.get("stderr") or first_pt.get("hellinger_stderr") or 0.0
+                    bar_errs.append(single_err)
+                else:
+                    bar_errs.append(target_std or 0.0)
+
+    st.subheader("Post-Transpile Metrics & Aggregate Results")
     st.dataframe(pd.DataFrame(table_rows), width="stretch")
 
-    # Bar chart of success probabilities with error bars
-    if bar_probs:
-        st.subheader("Success Probability Comparison (with Binomial Error)")
-        fig_hw, ax_hw = plt.subplots(figsize=(8, 4))
-        colors = ["#7f7f7f", "#2ca02c", "#1f77b4", "#ff7f0e"][:len(bar_variants)]
-        bars = ax_hw.bar(
-            bar_variants,
-            bar_probs,
-            yerr=bar_errs,
-            capsize=5,
-            color=colors,
-            alpha=0.85,
-            edgecolor="black",
-        )
-        ax_hw.set_ylabel("Success Probability")
-        ax_hw.set_ylim(0, max(bar_probs) * 1.25 if max(bar_probs) > 0 else 1.0)
-        ax_hw.set_title(f"Hardware Execution: {active_record.get('benchmark')} on {active_record.get('backend')}")
-        ax_hw.grid(True, linestyle="--", alpha=0.3, axis="y")
+    # Bar chart of mean performance with error bars and per-run scatter points
+    if bar_means:
+        metric_label = "Success Probability" if any(variants_summary[v].get("success_probability_mean") is not None for v in bar_variants) else "Hellinger Fidelity"
+        st.subheader(f"{metric_label} Across Runs (Mean with Error Bars & Per-Run Points)")
 
-        for bar, p_val in zip(bars, bar_probs):
+        fig_hw, ax_hw = plt.subplots(figsize=(8, 4.5))
+        colors = ["#7f7f7f", "#2ca02c", "#1f77b4", "#ff7f0e"][:len(bar_variants)]
+        x_indices = np.arange(len(bar_variants))
+
+        bars = ax_hw.bar(
+            x_indices,
+            bar_means,
+            yerr=bar_errs,
+            capsize=6,
+            color=colors,
+            alpha=0.75,
+            edgecolor="black",
+            label="Mean (+/- Std Dev)",
+            zorder=3,
+        )
+
+        # Overlay individual per-run points
+        scatter_plotted = False
+        for idx, v_name in enumerate(bar_variants):
+            pts = variants_summary[v_name].get("run_points", [])
+            vals = [pt.get("success_probability") if pt.get("success_probability") is not None else pt.get("hellinger_fidelity") for pt in pts]
+            vals = [v for v in vals if v is not None]
+
+            if vals:
+                jitter = np.linspace(-0.12, 0.12, len(vals)) if len(vals) > 1 else [0.0]
+                ax_hw.scatter(
+                    [idx + j for j in jitter],
+                    vals,
+                    color="#111111",
+                    edgecolor="white",
+                    linewidth=1.2,
+                    s=55,
+                    zorder=5,
+                    label="Individual Run" if not scatter_plotted else "",
+                )
+                scatter_plotted = True
+
+        ax_hw.set_xticks(x_indices)
+        ax_hw.set_xticklabels(bar_variants, fontweight="bold")
+        ax_hw.set_ylabel(metric_label)
+        max_y = max(bar_means) if bar_means else 1.0
+        ax_hw.set_ylim(0, min(1.1, max_y * 1.25 if max_y > 0 else 1.0))
+        ax_hw.set_title(f"IBM Hardware Evaluation: {selected_bench} ({backends_str})", fontweight="bold")
+        ax_hw.grid(True, linestyle="--", alpha=0.3, axis="y", zorder=1)
+        ax_hw.legend(loc="lower right")
+
+        for bar, m_val in zip(bars, bar_means):
             yval = bar.get_height()
             ax_hw.text(
                 bar.get_x() + bar.get_width() / 2.0,
-                yval + 0.01,
-                f"{p_val:.3f}",
+                yval + 0.02,
+                f"{m_val:.3f}",
                 ha="center",
                 va="bottom",
                 fontsize=9,
@@ -462,6 +504,27 @@ if hardware_records:
 
         st.pyplot(fig_hw)
         plt.close(fig_hw)
+
+    # Drill-down expander for individual run details
+    all_runs = []
+    for v_stats in variants_summary.values():
+        for pt in v_stats.get("run_points", []):
+            if pt.get("job_id") and pt not in all_runs:
+                all_runs.append(pt)
+
+    if all_runs:
+        with st.expander("🔍 Individual Run Details (Job IDs & Timestamps)"):
+            run_table = []
+            for r in all_runs:
+                run_table.append({
+                    "Run #": r.get("run_idx"),
+                    "Job ID": r.get("job_id"),
+                    "Backend": r.get("backend"),
+                    "Timestamp": str(r.get("timestamp", ""))[:19].replace("T", " "),
+                    "Success Prob": f"{r.get('success_probability'):.4f}" if r.get("success_probability") is not None else "N/A",
+                    "Hellinger Fidelity": f"{r.get('hellinger_fidelity'):.4f}" if r.get("hellinger_fidelity") is not None else "N/A",
+                })
+            st.dataframe(pd.DataFrame(run_table), width="stretch")
 
 # Offline simulation (dry-run) saved records
 dry_run_records = []

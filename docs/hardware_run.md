@@ -69,13 +69,37 @@ python hardware/run_ibm.py --benchmark qft_then_inverse_3 --shots 2000 --submit
 
 # Explicit backend target (e.g., ibm_fez)
 python hardware/run_ibm.py --benchmark qft_then_inverse_3 --backend ibm_fez --shots 2000 --submit
+
+# Repeated execution with strict QPU safety cap
+python hardware/run_ibm.py --benchmark qft_then_inverse_3 --repeats 2 --max-qpu-seconds 60 --submit
 ```
 
 When submitted:
-1. The job ID is printed immediately to the terminal.
-2. The script polls the job status every 10 seconds with clear status logs (`QUEUED`, `RUNNING`, `DONE`).
-3. Failed jobs do not auto-retry.
-4. Output is serialized immediately upon completion to `results/hardware/`.
+1. **Pre-Submission QPU Budget Guard**: Before submitting each job, the script queries `service.usage()`. If the remaining QPU quota is below `--max-qpu-seconds` (default: 60s) or the account limit is reached, execution immediately aborts with `RuntimeError` before submitting.
+2. The job ID is printed immediately to the terminal.
+3. The script polls the job status every 10 seconds with clear status logs (`QUEUED`, `RUNNING`, `DONE`).
+4. **No Auto-Retry**: Failed jobs (`ERROR`, `CANCELLED`) raise an exception immediately and never auto-retry.
+5. **Post-Job Usage Reporting**: The exact consumed and remaining QPU seconds from `service.usage()` are printed to stdout after job completion.
+6. **One JSON Per Repeat**: Output is serialized immediately upon completion to `results/hardware/` with metadata (`repeat_index`, `total_repeats`).
+
+### 3.3 Multi-Benchmark & Metric Evaluation
+The hardware evaluation script supports multiple benchmark circuits:
+- `qft_then_inverse_3`: Deterministic single-bitstring benchmark (`101`). Evaluated via `success_probability` with binomial standard error.
+- `ghz_3`: Superposition benchmark ($(|000\rangle + |111\rangle)/\sqrt{2}$). Evaluated via `hellinger_fidelity` against the exact ideal distribution with bootstrap standard error (100 resamples).
+- `random_seed_0`: Pseudo-random circuit with cancellation redundancies. Ideal distribution is dynamically computed via statevector simulation ($\le 7$ qubits).
+
+### 3.4 Multi-Run Results Aggregation
+To aggregate across multiple saved hardware executions:
+
+```bash
+# Aggregate all saved hardware results across benchmarks and variants
+python scripts/aggregate_hardware.py
+
+# Filter aggregation to a specific benchmark
+python scripts/aggregate_hardware.py --benchmark qft_then_inverse_3
+```
+
+This reports sample mean and standard deviation across saved JSON files for total gates, 2Q gates, circuit depth, success probability, and Hellinger fidelity.
 
 ---
 

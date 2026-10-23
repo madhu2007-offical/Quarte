@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 import pytest
 
 from hardware.run_ibm import find_best_layout, run_hardware_workflow
@@ -146,3 +146,208 @@ def test_dashboard_hardware_panel_hiding_logic(tmp_path):
         if json.loads(f.read_text(encoding="utf-8")).get("mode") == "hardware"
     ]
     assert len(hw_files_real) == 1  # Panel activates
+
+
+def test_usage_guard_aborts_when_qpu_time_below_threshold(tmp_path):
+    """Verify that submit=True immediately aborts without submitting if QPU time is below safety cap."""
+    with patch("qiskit_ibm_runtime.QiskitRuntimeService") as mock_service_cls, \
+         patch("qiskit_ibm_runtime.SamplerV2") as mock_sampler_cls:
+
+        mock_service = MagicMock()
+        mock_service_cls.return_value = mock_service
+
+        mock_backend = fp.FakeSherbrooke()
+        mock_service.least_busy.return_value = mock_backend
+        mock_service.backend.return_value = mock_backend
+
+        # Scenario 1: remaining QPU time (25s) is below max_qpu_seconds (60s)
+        mock_service.usage.return_value = {
+            "usage_remaining_seconds": 25.0,
+            "usage_limit_reached": False,
+        }
+
+        mock_sampler = MagicMock()
+        mock_sampler_cls.return_value = mock_sampler
+
+        with pytest.raises(RuntimeError) as exc_info:
+            run_hardware_workflow(
+                benchmark_name="bell",
+                shots=100,
+                submit=True,
+                max_qpu_seconds=60.0,
+                output_dir=str(tmp_path),
+            )
+
+        assert "Aborting hardware submission" in str(exc_info.value)
+        assert "below the configured safety threshold of 60.0s" in str(exc_info.value)
+        # Verify SamplerV2.run was NEVER called
+        mock_sampler.run.assert_not_called()
+
+        # Scenario 2: usage_limit_reached is True
+        mock_service.usage.return_value = {
+            "usage_remaining_seconds": 120.0,
+            "usage_limit_reached": True,
+        }
+
+        with pytest.raises(RuntimeError) as exc_info2:
+            run_hardware_workflow(
+                benchmark_name="bell",
+                shots=100,
+                submit=True,
+                max_qpu_seconds=60.0,
+                output_dir=str(tmp_path),
+            )
+
+        assert "Aborting hardware submission" in str(exc_info2.value)
+        mock_sampler.run.assert_not_called()
+
+
+def test_aggregation_hardware_results(tmp_path):
+    """Verify aggregate_hardware_results computes accurate mean, std, and ignores dry-run files."""
+    from scripts.aggregate_hardware import aggregate_hardware_results
+
+    # Run 1 (Hardware)
+    run1 = {
+        "benchmark": "qft_then_inverse_3",
+        "backend": "ibm_fez",
+        "job_id": "job_001",
+        "timestamp": "2026-10-23T01:00:00+00:00",
+        "shots": 2000,
+        "layout": [22, 23, 24],
+        "mode": "hardware",
+        "variants": {
+            "original": {
+                "post_transpile_metrics": {"total_gates": 180, "two_qubit_gates": 24, "depth": 120},
+                "success_probability": 0.88,
+                "stderr": 0.007,
+                "hellinger_fidelity": 0.88,
+            },
+            "ours": {
+                "post_transpile_metrics": {"total_gates": 130, "two_qubit_gates": 18, "depth": 90},
+                "success_probability": 0.90,
+                "stderr": 0.006,
+                "hellinger_fidelity": 0.90,
+            },
+            "qiskit_L1": {
+                "post_transpile_metrics": {"total_gates": 130, "two_qubit_gates": 18, "depth": 90},
+                "success_probability": 0.91,
+                "stderr": 0.006,
+                "hellinger_fidelity": 0.91,
+            },
+            "qiskit_L3": {
+                "post_transpile_metrics": {"total_gates": 2, "two_qubit_gates": 0, "depth": 1},
+                "success_probability": 0.98,
+                "stderr": 0.003,
+                "hellinger_fidelity": 0.98,
+            },
+        },
+    }
+
+    # Run 2 (Hardware)
+    run2 = {
+        "benchmark": "qft_then_inverse_3",
+        "backend": "ibm_fez",
+        "job_id": "job_002",
+        "timestamp": "2026-10-23T01:05:00+00:00",
+        "shots": 2000,
+        "layout": [22, 23, 24],
+        "mode": "hardware",
+        "variants": {
+            "original": {
+                "post_transpile_metrics": {"total_gates": 180, "two_qubit_gates": 24, "depth": 120},
+                "success_probability": 0.90,
+                "stderr": 0.006,
+                "hellinger_fidelity": 0.90,
+            },
+            "ours": {
+                "post_transpile_metrics": {"total_gates": 130, "two_qubit_gates": 18, "depth": 90},
+                "success_probability": 0.94,
+                "stderr": 0.005,
+                "hellinger_fidelity": 0.94,
+            },
+            "qiskit_L1": {
+                "post_transpile_metrics": {"total_gates": 130, "two_qubit_gates": 18, "depth": 90},
+                "success_probability": 0.93,
+                "stderr": 0.005,
+                "hellinger_fidelity": 0.93,
+            },
+            "qiskit_L3": {
+                "post_transpile_metrics": {"total_gates": 2, "two_qubit_gates": 0, "depth": 1},
+                "success_probability": 0.98,
+                "stderr": 0.003,
+                "hellinger_fidelity": 0.98,
+            },
+        },
+    }
+
+    # Run 3 (Dry Run - should be ignored)
+    run_dry = {
+        "benchmark": "qft_then_inverse_3",
+        "backend": "fake_sherbrooke",
+        "job_id": "dry_run_003",
+        "timestamp": "2026-10-23T01:10:00+00:00",
+        "shots": 2000,
+        "layout": [0, 1, 2],
+        "mode": "dry_run",
+        "variants": {},
+    }
+
+    (tmp_path / "run1.json").write_text(json.dumps(run1), encoding="utf-8")
+    (tmp_path / "run2.json").write_text(json.dumps(run2), encoding="utf-8")
+    (tmp_path / "run_dry.json").write_text(json.dumps(run_dry), encoding="utf-8")
+
+    agg = aggregate_hardware_results(tmp_path)
+    assert "qft_then_inverse_3" in agg
+    data = agg["qft_then_inverse_3"]
+
+    assert data["total_runs"] == 2
+    assert data["backends"] == ["ibm_fez"]
+
+    ours = data["variants"]["ours"]
+    assert ours["num_runs"] == 2
+    assert abs(ours["success_probability_mean"] - 0.92) < 1e-5
+    # Sample std of [0.90, 0.94] with ddof=1 is sqrt(0.04^2 / 2) = 0.028284
+    assert abs(ours["success_probability_std"] - 0.028284) < 1e-4
+
+    orig = data["variants"]["original"]
+    assert abs(orig["success_probability_mean"] - 0.89) < 1e-5
+    assert abs(orig["success_probability_std"] - 0.014142) < 1e-4
+
+
+def test_hellinger_versus_ideal_known_inputs():
+    """Verify exact Hellinger fidelity calculations and ideal distribution simulation on known inputs."""
+    from benchmarks.generators import ghz, qft_then_inverse
+    from hardware.run_ibm import bootstrap_hellinger_stderr, compute_ideal_distribution
+    from simulation.fidelity import hellinger_fidelity_from_counts
+
+    # Known Input 1: Exact identical distributions -> F_H = 1.0
+    dist_exact = {"000": 500, "111": 500}
+    fid_exact = hellinger_fidelity_from_counts(dist_exact, dist_exact)
+    assert abs(fid_exact - 1.0) < 1e-6
+    err_exact = bootstrap_hellinger_stderr(dist_exact, dist_exact, shots=1000)
+    assert abs(err_exact) < 1e-3
+
+    # Known Input 2: Orthogonal / disjoint distributions -> F_H = 0.0
+    dist_ortho_1 = {"000": 1000}
+    dist_ortho_2 = {"111": 1000}
+    fid_ortho = hellinger_fidelity_from_counts(dist_ortho_1, dist_ortho_2)
+    assert abs(fid_ortho - 0.0) < 1e-6
+
+    # Known Input 3: Half overlap -> Bhattacharyya coeff = sqrt(0.5) -> F_H = 0.5
+    dist_half_1 = {"00": 1000}
+    dist_half_2 = {"00": 500, "11": 500}
+    fid_half = hellinger_fidelity_from_counts(dist_half_1, dist_half_2)
+    assert abs(fid_half - 0.5) < 1e-6
+
+    # Known Input 4: GHZ 3-qubit state ideal distribution
+    ghz_circ = ghz(3)
+    ideal_ghz = compute_ideal_distribution(ghz_circ)
+    assert len(ideal_ghz) == 2
+    assert abs(ideal_ghz.get("000", 0.0) - 0.5) < 1e-5
+    assert abs(ideal_ghz.get("111", 0.0) - 0.5) < 1e-5
+
+    # Known Input 5: QFT-then-inverse 3-qubit deterministic state |101>
+    qft_inv_circ = qft_then_inverse(3, "101")
+    ideal_qft_inv = compute_ideal_distribution(qft_inv_circ)
+    assert len(ideal_qft_inv) == 1
+    assert abs(ideal_qft_inv.get("101", 0.0) - 1.0) < 1e-5
