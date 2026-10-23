@@ -100,11 +100,19 @@ optimize_button = st.button("Optimize circuit", type="primary")
 parsed_circuit: QuantumCircuit = None
 parse_error: str = None
 
-if custom_qasm_input.strip():
-    try:
-        parsed_circuit = loads(custom_qasm_input)
-    except Exception as ex:
-        parse_error = f"Error parsing QASM: {ex}"
+if selected_bench != "(Custom QASM)":
+    bench_match = next(b for b in suite if b["name"] == selected_bench)
+    parsed_circuit = bench_match["circuit"].copy()
+else:
+    if custom_qasm_input.strip():
+        try:
+            import qiskit.qasm2 as qasm2
+            parsed_circuit = qasm2.loads(
+                custom_qasm_input,
+                custom_instructions=qasm2.LEGACY_CUSTOM_INSTRUCTIONS,
+            )
+        except Exception as ex:
+            parse_error = f"Error parsing QASM: {ex}"
 
 if parse_error:
     st.error(parse_error)

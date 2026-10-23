@@ -202,44 +202,51 @@ def apply_carbon_theme() -> None:
        Carbon Top Header Bar (#161616, 48px height)
        ------------------------------------------------------------------------- */
     .carbon-top-header {
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 48px;
-        background-color: #161616;
-        color: #ffffff;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 0 24px;
-        z-index: 99999;
-        box-sizing: border-box;
-        border-bottom: 1px solid #393939;
+        position: fixed !important;
+        top: 0 !important;
+        left: 0 !important;
+        right: 0 !important;
+        width: 100% !important;
+        height: 48px !important;
+        background-color: #161616 !important;
+        color: #ffffff !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: space-between !important;
+        padding: 0 24px !important;
+        z-index: 99999999 !important;
+        box-sizing: border-box !important;
+        border-bottom: 1px solid #393939 !important;
     }
     .carbon-top-header .brand-title {
-        font-size: 16px;
-        font-weight: 600;
-        color: #ffffff;
-        letter-spacing: 0.2px;
+        font-size: 16px !important;
+        font-weight: 600 !important;
+        color: #ffffff !important;
+        letter-spacing: 0.2px !important;
     }
     .carbon-top-header .header-tag {
-        font-size: 12px;
-        color: #f4f4f4;
-        background-color: #262626;
-        border: 1px solid #525252;
-        padding: 2px 10px;
-        border-radius: 12px;
-        letter-spacing: 0.2px;
+        font-size: 12px !important;
+        color: #f4f4f4 !important;
+        background-color: #262626 !important;
+        border: 1px solid #525252 !important;
+        padding: 2px 10px !important;
+        border-radius: 12px !important;
+        letter-spacing: 0.2px !important;
     }
 
     /* -------------------------------------------------------------------------
        Carbon Sidebar & Side Navigation
        ------------------------------------------------------------------------- */
-    section[data-testid="stSidebar"] {
+    section[data-testid="stSidebar"],
+    div[data-testid="stSidebarContent"],
+    div[data-testid="stSidebarUserContent"],
+    section[data-testid="stSidebar"] > div {
         background-color: #f4f4f4 !important;
+    }
+    section[data-testid="stSidebar"] {
+        top: 48px !important;
+        height: calc(100vh - 48px) !important;
         border-right: 1px solid #e0e0e0 !important;
-        padding-top: 48px !important;
     }
     section[data-testid="stSidebar"] h1,
     section[data-testid="stSidebar"] h2,
@@ -257,15 +264,25 @@ def apply_carbon_theme() -> None:
     /* Sidebar Radio styling as Carbon Side Nav */
     div[data-testid="stSidebar"] div[role="radiogroup"] {
         gap: 0px !important;
-        display: flex;
-        flex-direction: column;
-        border-top: 1px solid #e0e0e0;
-        border-bottom: 1px solid #e0e0e0;
+        display: flex !important;
+        flex-direction: column !important;
+        border-top: 1px solid #e0e0e0 !important;
+        border-bottom: 1px solid #e0e0e0 !important;
+        background-color: #f4f4f4 !important;
     }
-    div[data-testid="stSidebar"] div[role="radiogroup"] > label {
-        display: flex;
-        align-items: center;
-        height: 40px;
+    /* Hide the BaseWeb/Streamlit visual radio circle indicator */
+    div[data-testid="stSidebar"] div[role="radiogroup"] label > div:first-of-type,
+    div[data-testid="stSidebar"] div[data-testid="stRadio"] label > div:first-of-type,
+    div[data-testid="stSidebar"] div[role="radiogroup"] label svg,
+    div[data-testid="stSidebar"] div[role="radiogroup"] input {
+        display: none !important;
+    }
+    div[data-testid="stSidebar"] div[role="radiogroup"] > label,
+    div[data-testid="stSidebar"] div[data-testid="stRadio"] label {
+        display: flex !important;
+        align-items: center !important;
+        width: 100% !important;
+        height: 40px !important;
         padding: 0 16px !important;
         margin: 0 !important;
         border-left: 3px solid transparent !important;
@@ -274,22 +291,22 @@ def apply_carbon_theme() -> None:
         font-size: 14px !important;
         font-weight: 400 !important;
         border-radius: 0px !important;
-        cursor: pointer;
+        cursor: pointer !important;
         transition: all 110ms ease-in-out !important;
-        border-bottom: 1px solid #f0f0f0;
+        border-bottom: 1px solid #e8e8e8 !important;
+        box-sizing: border-box !important;
     }
-    div[data-testid="stSidebar"] div[role="radiogroup"] > label:hover {
+    div[data-testid="stSidebar"] div[role="radiogroup"] > label:hover,
+    div[data-testid="stSidebar"] div[data-testid="stRadio"] label:hover {
         background-color: #e5e5e5 !important;
         color: #161616 !important;
     }
-    div[data-testid="stSidebar"] div[role="radiogroup"] > label:has(input:checked) {
+    div[data-testid="stSidebar"] div[role="radiogroup"] > label:has(input:checked),
+    div[data-testid="stSidebar"] div[data-testid="stRadio"] label:has(input:checked) {
         border-left: 3px solid #0f62fe !important;
         background-color: #e8e8e8 !important;
         color: #161616 !important;
         font-weight: 600 !important;
-    }
-    div[data-testid="stSidebar"] div[role="radiogroup"] input[type="radio"] {
-        display: none !important;
     }
     div[data-testid="stSidebar"] div[role="radiogroup"] div[data-testid="stMarkdownContainer"] {
         padding: 0 !important;
